@@ -178,14 +178,20 @@ uv run python scripts/finetune/export_real_manifest_actions.py \
   --output-dir output/real_manifest_action_dataset_20260914 \
   --resume
 
-# 本地 vLLM 服务真正就绪后，先跑 CH30；不会回退 mock
-uv run python scripts/run/run_real_manifest.py \
-  --mode run \
-  --dataset-id cM2-e008_021-028_CH30 \
+# 本地 vLLM 服务真正就绪后，固定人工状态，只跑 CH30 前 3 个样本
+uv run python scripts/test/eval_unit_actions_from_dataset.py \
+  --input-jsonl output/real_manifest_action_dataset_20260914/samples.jsonl \
+  --dataset-root output/real_manifest_action_dataset_20260914 \
+  --eval-channels CH30 \
   --provider vllm \
   --model Qwen/Qwen3.5-4B \
-  --output-dir output/real_open_vlm_20260914
+  --max-samples 3 \
+  --disable-thinking \
+  --max-tokens 32 \
+  --output-dir output/real_qwen35_ch30_smoke_20260915
 ```
+
+`run_real_manifest.py --mode run` 会执行完整自主 channel，不带 3-step 上限；它应留到固定状态 baseline 通过之后。
 
 ## 新 GitHub 仓库发布边界（2026-09-15 审计）
 
@@ -217,6 +223,13 @@ uv run python scripts/run/run_real_manifest.py \
 - MAT 和 action workbook 要保留，因为它们才是可重建训练样本和评测目标的源数据。
 - 已导出的 486 MiB PNG 是即将给 base VLM/SFT 使用的直接输入，但目前尚未被开源 VLM 实际推理；现有成功结果只证明数据回放、图像生成、schema 和无泄漏 split 正确。
 - GitHub 新仓库不上传 `.fig`、MAT、PNG dataset 或任何 `output/`；它们均可由本地源数据/脚本重建。
+
+### 2026-09-15 CH30 真实图片 smoke 尝试
+
+- 已按真实 Qwen/vLLM 路径启动检查；未使用 mock、未调用外部 API、未读取或修改 MAT。
+- 当前 Codex 沙箱内没有运行中的 vLLM 服务，项目轻量 `.venv` 也没有 `torch/transformers/vllm`，因此在模型调用前安全停止，没有生成成绩。
+- Windows/WSL 主机可识别 RTX 3070 Laptop GPU（8 GiB）；Qwen3.5-4B 官方 BF16 权重约 9.34 GB，正式本地运行需验证 4-bit 方案，或优先在 A100 上保持未量化 baseline。
+- smoke 应使用上面的固定状态 `--max-samples 3` 命令；完整自主 channel 不是 smoke。
 
 ## 最新待办（高 → 低）
 

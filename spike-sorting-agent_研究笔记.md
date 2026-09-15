@@ -486,6 +486,12 @@ Qwen/Gemma 是仓库已有训练脚本支持的候选 baseline，并非 proposal
 - 当前 VLM/SFT 输入是从 MAT 回放后重生成的 5,327 张 PNG，约 486 MiB；尚未由开源 VLM 实际推理。
 - 源 MAT 与 action workbook 必须保留；`.fig` 可外部归档；GitHub 不上传 data、`.fig`、生成 PNG 或任何 `output/`。
 
+### CH30 真实图片 smoke 尝试
+
+- 已尝试启动真实 Qwen/vLLM 路径；本地服务未就绪，且轻量 `.venv` 无 open-model 依赖，因此在模型调用前安全停止，无 mock、无 API、无成绩。
+- 主机可识别 RTX 3070 Laptop GPU（8 GiB），但 Qwen3.5-4B BF16 权重约 9.34 GB；本地需验证 4-bit，未量化正式 baseline 优先使用 A100。
+- 纠正文档：3-step smoke 使用固定人工状态评测脚本的 `--max-samples 3`；`run_real_manifest.py --mode run` 是完整自主 channel，不能当作 3-step smoke。
+
 ### 最新待办：真实数据线（高 → 低）
 
 - [ ] 修复 WSL GPU 可见性，或转到 A100 集群；建立独立 open-model 环境并启动本地 VLM 服务。
