@@ -1,0 +1,56 @@
+# Setting 004: controlled action-coverage data for simulation-only curation tests.
+
+setting_id: setting_004_action_coverage
+
+simulation:
+  n_channels: 12
+  duration: 120
+  n_neurons_range: [8, 16]
+  probe: "Neuronexus-32"
+  seed: 20260818
+
+noise:
+  level: "medium"
+  noise_level: 20.0
+
+drift:
+  enabled: true
+  drift_velocity: 5.0
+
+overlap:
+  enabled: true
+  max_overlap_pairs: 3
+
+artifact:
+  type: "none"
+
+# Applied after sorting, with explicit GT labels.  These are controlled initial
+# curation errors, not claimed biological artifacts.
+curation_perturbations:
+  forced_merge_pairs: 1
+  noise_clusters: 1
+  noise_spikes_per_cluster: 600
+
+teacher_criteria:
+  min_spike_count: 300
+  max_isi_violation_rate: 0.015
+  require_biphasic: false
+  min_snr: 2.5
+  teacher_style: "liberal"
+
+adaptation:
+  n_train_channels: 8
+  n_eval_channels: 4
+  split_seed: 3
+
+sorter:
+  name: "mountainsort5"
+  detect_threshold: 5.0
+  snippet_T1: 20
+  snippet_T2: 20
+
+hierarchy:
+  enabled: true
+  similarity_metric: "pearson"
+  min_similarity: 0.90
+  max_merges: null

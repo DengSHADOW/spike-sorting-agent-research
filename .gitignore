@@ -1,0 +1,41 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.env
+.env.*
+!.env.example
+.DS_Store
+# Virtual environments
+.venv
+
+data/
+*.mat
+*.csv
+*.h5
+*.hdf5
+*.fig
+*.tar
+*.tar.gz
+*.zip
+
+# Local model weights and training caches
+checkpoints/
+wandb/
+*.safetensors
+*.ckpt
+*.pth
+*.pt
+
+# Local external datasets; keep them out of future repository uploads
+Tianmin_Annotated_data/
+Jacob Bedke-Annotated_spike_sorting_data_w_chronux/
+
+output/
+*output/
+
+# MEArec scratch file emitted in the working directory
+tmp_params_path.yaml
