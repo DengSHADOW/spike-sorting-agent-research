@@ -88,6 +88,23 @@ memory.
 ### `aggregate/`
 - `aggregate_results.py` — cross-channel metrics aggregation
 - `aggregate_baseline.py` — aggregate baseline pipeline results
+- `collect_runpod_experiment.py` — collect compact Runpod results, provenance, environment metadata, logs, and SHA-256 checksums into one transfer archive
+
+After a Runpod evaluation finishes, collect its outputs before stopping the Pod:
+
+```bash
+uv run python scripts/aggregate/collect_runpod_experiment.py \
+  --run-dir output/qwen35_ch30_smoke \
+  --extra-file output/vllm_logs/qwen35_base.log \
+  --run-name qwen35_ch30_smoke_20260921
+```
+
+The resulting directory and `.tar.gz` contain predictions, metrics, raw model
+responses, text logs, the Git commit, GPU/software metadata, file sizes, and
+SHA-256 checksums. The collector deliberately does not recursively copy the run
+directory, so MAT data, diagnostic images, model weights, caches, and `.env`
+files are excluded. Verify a downloaded bundle from inside its directory with
+`sha256sum -c checksums.sha256`.
 
 ### `analysis/`
 - `compute_human_curation.py` — analyze human curation patterns
