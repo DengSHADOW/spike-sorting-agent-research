@@ -668,3 +668,28 @@ Qwen/Gemma 是仓库已有训练脚本支持的候选 baseline，并非 proposal
 ### 模拟数据线
 
 - 暂停；当前不继续投入运行或扩展。
+
+---
+
+## 2026-09-21 — Numeric-only recording-block baseline
+
+- 已在本地 CPU 完成 numeric-only baseline；未使用 H100、图片、API、RAG 或 final-test，未修改 MAT/cluster 状态。
+- Train 为三个 recording blocks：973 条总动作，其中 split stage 831 条（SPLIT 457、DISCARD 374）；CH30 validation 为 90 条。模型选择只使用 train-only leave-one-recording-block-out CV，无 recording overlap。
+- Random Forest 的 train grouped OOF accuracy/macro-F1 为 `0.904/0.903`，高于 HistGradientBoosting 的 `0.889/0.889`，因此在查看 CH30 前锁定 RF 为 primary。
+- CH30：RF split-stage `78/84 = 0.929`；overall `84/90 = 0.933`、macro-F1 `0.952`。DISCARD P/R/F1 `1.000/0.854/0.921`，SPLIT `0.878/1.000/0.935`；6 个错误全部为 DISCARD→SPLIT。
+- HistGradientBoosting 在 CH30 为 85/90，但 train grouped CV 略低，只作 secondary，不能看完 validation 后事后换主模型。
+- merge train 142 条和 CH30 6 条全部为 MERGE，没有 NOT_MERGE/merge-stage DISCARD；6/6 仅来自显式 constant MERGE，不是学得的 merge 泛化能力。
+- RF 主要使用 `n_spikes`（importance 0.601）和 `n_overclusters`（0.241）。这证明专家动作与数值指标高度相关，也提示 numeric shortcut；不能由此断言图像无用，因为 RF 有 831 条监督而 base VLM 是 zero-shot。
+- 完整分析见 `CH30_NUMERIC_BASELINE_20260921.md`；脚本为 `scripts/analysis/run_numeric_action_baseline.py`，结果和主模型位于 `output/numeric_action_baseline_20260921/`，checksum 已通过。
+
+### 最新待办：真实数据线（高 → 低）
+
+- [ ] 以 numeric RF 的 CH30 `0.933` 为门槛，在相同 train blocks 上设计 images-only 与 images+numeric action-only SFT ablation；final-test 保持未使用。
+- [ ] 补齐或明确派生 KEEP/NOT_MERGE，逐条保留 human/derived/API-teacher provenance；缺少负例时只声明 expert edit imitation。
+- [ ] 以 Qwen3.5-9B 训练第一版 action-only LoRA/SFT，Gemma-4-E4B-it 仅作必要跨架构复核；CH30 用于 validation。
+- [ ] 仅在 fixed-state DISCARD、KEEP/NOT_MERGE 和 abstention 安全指标达标后进入 autonomous rollout；DISCARD 先 quarantine/可回滚。
+- [ ] 模型和协议冻结后，final-test block 只评估一次，再决定是否需要 API teacher、RAG、DPO/RL 或公开 benchmark 扩展。
+
+### 模拟数据线
+
+- 暂停；当前不继续投入运行或扩展。

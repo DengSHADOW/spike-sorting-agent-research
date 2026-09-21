@@ -108,6 +108,7 @@ files are excluded. Verify a downloaded bundle from inside its directory with
 
 ### `analysis/`
 - `analyze_action_baseline.py` — generate a consistent action report with precision/recall/F1, confusion, format compliance, numeric summaries, and error cases
+- `run_numeric_action_baseline.py` — train RF/HistGradientBoosting on train recording blocks only, select by grouped CV, and evaluate once on CH30 without using images or the final-test block
 - `compute_human_curation.py` — analyze human curation patterns
 - `evaluate_baseline.py` — evaluate baseline pipeline
 - `generate_curation_stats_table.py` — statistics tables
@@ -115,6 +116,15 @@ files are excluded. Verify a downloaded bundle from inside its directory with
 - `audit_real_action_replay.py` — replay legacy CSV actions without calling a VLM
 - `audit_real_action_sources.py` — compare MAT-internal, CSV, and Excel action sources
 - `audit_real_mat_internal_actions.py` — audit all current MAT action logs against final assignments
+
+```bash
+uv run python scripts/analysis/run_numeric_action_baseline.py \
+  --output-dir output/numeric_action_baseline_20260921
+```
+
+The learned numeric task is split-stage `DISCARD` versus `SPLIT`. Existing
+merge logs are positive-only, so the script reports constant `MERGE` separately
+and does not misrepresent it as a learned merge classifier.
 
 ### `plot/`
 - `plot_ablation.py` — ablation test results

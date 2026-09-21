@@ -4,6 +4,7 @@ scipy>=1.7.0,<1.14
 matplotlib>=3.5.0
 pandas>=1.3.0
 h5py
+scikit-learn>=1.2
 
 # Spike sorting
 spikeinterface>=0.98.0
