@@ -644,3 +644,27 @@ Qwen/Gemma 是仓库已有训练脚本支持的候选 baseline，并非 proposal
 ### 模拟数据线
 
 - 暂停；当前不继续投入运行或扩展。
+
+---
+
+## 2026-09-21 — CH30 open-VLM 同协议横向对照
+
+- 已在同一 Runpod H100 80 GB、同一 CH30 90 条 fixed-state 数据和同一 `action-only-json-v2` 协议下完成 Qwen3.5-2B、4B、9B 与 Gemma-4-E4B-it 对照；输入均为真实诊断图和数值指标，未调用 API、mock/RAG，未修改 MAT，也未更新 cluster 状态。
+- 四个模型均严格 action-only JSON `90/90`，无解析失败或截断；因此结果差异来自模型决策，不再受输出协议错误干扰。
+- Qwen3.5-2B：accuracy `0.067`、macro-F1 `0.333`；Qwen3.5-4B：`0.378/0.530`；Qwen3.5-9B：`0.500/0.570`；Gemma-4-E4B-it：`0.544/0.578`。
+- DISCARD 是共同失败点：2B/9B/Gemma 为 `0/41`，4B 仅 `1/41`。Gemma 的准确率恰好等于同集 stage-majority 诊断参照 `49/90`，不能据此证明视觉输入有增量价值。
+- 四模型均命中 6/6 MERGE，但 CH30 没有 NOT_MERGE 负例；该结果不能证明完整 merge 判断能力。现有日志也没有人工 KEEP ground truth，因此本轮只属于 expert edit-action baseline。
+- 模型扩容从 2B 到 9B 有明显收益，但没有解决 DISCARD；停止继续无目的增加 zero-shot 模型。第一版 SFT 主候选暂定 Qwen3.5-9B，Gemma 保留为跨架构复核。
+- 结果归档已下载并 checksum 通过；统一分析见 `CH30_OPEN_VLM_COMPARISON_20260921.md`。vLLM 模型进程已关闭，Pod 本身仍需在 Runpod 页面 Stop。
+
+### 最新待办：真实数据线（高 → 低）
+
+- [ ] 只用 train recording 拟合 numeric-only Random Forest/gradient-boosted baseline，在 CH30 validation 固定评估。
+- [ ] 做 numeric-only、images-only、combined ablation，确认诊断图是否提供超出数值 shortcut 的增量。
+- [ ] 补齐或明确派生 KEEP/NOT_MERGE，逐条保留 human/derived/API-teacher provenance，并冻结 SFT 数据版本。
+- [ ] 以 Qwen3.5-9B 训练第一版 action-only LoRA/SFT，Gemma-4-E4B-it 仅作必要的跨架构复核；CH30 用于 validation，final-test block 在方案冻结后只用一次。
+- [ ] 仅在 fixed-state DISCARD/负例安全指标达标后进入 autonomous rollout；DISCARD 先 quarantine/可回滚，并报告终态质量和 abstention。
+
+### 模拟数据线
+
+- 暂停；当前不继续投入运行或扩展。
