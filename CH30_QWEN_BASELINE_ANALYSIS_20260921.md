@@ -121,8 +121,8 @@ Rationale 不是人工 ground truth，也不应作为正式 CoT 证据，但可�
 
 ## 9. 接下来的固定顺序
 
-1. 修复 action-only 协议：采用唯一的结构化目标 `{"action":"..."}`，schema 禁止 rationale/额外字段，删除互相冲突的 prompt，并版本化协议。
-2. 在冻结协议后复跑 CH30 90 条，形成可与其他模型直接比较的正式 base Qwen baseline。
+1. **已完成代码修复**：`action-only-json-v2` 采用唯一结构化目标 `{"action":"..."}`，schema 禁止 rationale/额外字段，删除冲突 prompt，并默认启用标准 JSON schema；尚待真实 vLLM smoke 验证。
+2. 先做 3-sample schema smoke；格式 3/3 合规后复跑 CH30 90 条，形成可与其他模型直接比较的正式 base Qwen baseline。
 3. 只用 train recording 拟合 numeric-only Random Forest/gradient boosting，在 CH30 validation 上一次性评估。
 4. 做 numeric-only、images-only、combined ablation，判断 VLM 是否真正利用诊断图。
 5. 在相同协议下测试 Gemma；再根据效果、显存和格式稳定性选择 SFT backbone。

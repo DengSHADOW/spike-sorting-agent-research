@@ -598,3 +598,26 @@ Qwen/Gemma 是仓库已有训练脚本支持的候选 baseline，并非 proposal
 ### 模拟数据线
 
 - 暂停；当前不继续投入运行或扩展。
+
+---
+
+## 2026-09-21 — `action-only-json-v2` 协议修复
+
+- 发现时间：CH30 3-sample smoke 已出现 JSON+rationale；全 90 条运行进一步确认 90/90 未遵守单 token 指令，且 3 条 rationale 因 64-token 上限截断。
+- 根因：导出数据的 prompt 要求 `{"action": ..., "rationale": ...}`，评估器又追加“只输出一个 token、不要 JSON”，形成互相冲突的输出要求；同时首轮未启用 response schema，action-only schema 还允许额外字段。
+- 已修复为唯一版本化协议 `action-only-json-v2`：先移除 legacy rationale prompt，再要求只返回 `{"action":"ACTION"}`；schema 设置 `additionalProperties=false`，正式 fixed-state 评测默认启用 response schema。
+- vLLM 0.29 使用标准 `response_format=json_schema`；schema 不兼容时直接停止，不静默回退自由文本。legacy 无 schema 模式只能通过显式 `--no-response-schema` 启用。
+- 统一分析脚本同步新增 `strict_action_only_json` 指标，避免把新协议的合法 JSON 按旧“单 token”口径误判。
+- 本地协议/API/安全测试已通过；尚未重新启动 GPU，真实 vLLM 兼容性需下一次 3-sample smoke 验证。
+
+### 最新待办：真实数据线（高 → 低）
+
+- [ ] 在真实 vLLM 上运行 3-sample `action-only-json-v2` smoke；要求 3/3 为只有 action 字段的完整 JSON。
+- [ ] smoke 通过后复跑 CH30 90 条正式 base Qwen baseline。
+- [ ] 用 train recording 拟合 numeric-only baseline，并在 CH30 validation 一次性评估。
+- [ ] 做 numeric-only、images-only、combined ablation，再同协议比较一个 Gemma base 候选。
+- [ ] 补齐 KEEP/NOT_MERGE 后再训练 action-only LoRA/SFT；随后才考虑 autonomous rollout。
+
+### 模拟数据线
+
+- 暂停；当前不继续投入运行或扩展。

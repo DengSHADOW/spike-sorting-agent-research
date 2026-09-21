@@ -38,6 +38,7 @@ MERGE_IMAGE_KEYS: Sequence[str] = (
 
 SPLIT_ACTIONS = {"KEEP", "DISCARD", "SPLIT"}
 MERGE_ACTIONS = {"MERGE", "NOT_MERGE", "DISCARD"}
+ACTION_ONLY_PROTOCOL_VERSION = "action-only-json-v2"
 
 SPLIT_SCHEMA: Dict[str, Any] = {
     "type": "object",
@@ -65,7 +66,7 @@ SPLIT_ACTION_ONLY_SCHEMA: Dict[str, Any] = {
         "action": {"type": "string", "enum": sorted(SPLIT_ACTIONS)},
     },
     "required": ["action"],
-    "additionalProperties": True,
+    "additionalProperties": False,
 }
 
 MERGE_ACTION_ONLY_SCHEMA: Dict[str, Any] = {
@@ -74,7 +75,7 @@ MERGE_ACTION_ONLY_SCHEMA: Dict[str, Any] = {
         "action": {"type": "string", "enum": sorted(MERGE_ACTIONS)},
     },
     "required": ["action"],
-    "additionalProperties": True,
+    "additionalProperties": False,
 }
 
 
@@ -124,13 +125,32 @@ def _allowed_actions_for_row(row: Dict[str, Any]) -> List[str]:
     return sorted(SPLIT_ACTIONS if stage == "split" else MERGE_ACTIONS)
 
 
+def _strip_legacy_output_contract(prompt: str) -> str:
+    """Remove the exporter-era reasoned JSON instruction at the prompt tail."""
+    return re.sub(
+        r"\n\s*(?:Return only final answer JSON|Output only in JSON schema|Output JSON:).*$",
+        "",
+        prompt,
+        flags=re.IGNORECASE | re.DOTALL,
+    ).rstrip()
+
+
 def _action_only_instruction(stage: str, allowed_actions: Sequence[str]) -> str:
-    choices = "|".join(allowed_actions)
+    choices = ", ".join(allowed_actions)
     return (
-        "\n\nFinal instruction:\n"
-        f"- Output exactly one token from: {choices}\n"
-        "- Do not output rationale, explanation, JSON, markdown, or extra text."
+        f"\n\nOutput contract ({ACTION_ONLY_PROTOCOL_VERSION}):\n"
+        '- Return exactly one JSON object with the shape: {"action":"ACTION"}\n'
+        f"- ACTION must be one of: {choices}\n"
+        "- Do not include rationale, explanation, markdown, or additional keys."
     )
+
+
+def _action_only_prompt(
+    prompt: str,
+    stage: str,
+    allowed_actions: Sequence[str],
+) -> str:
+    return _strip_legacy_output_contract(prompt) + _action_only_instruction(stage, allowed_actions)
 
 
 def _predict_action(
@@ -158,7 +178,7 @@ def _predict_action(
         else:
             kwargs["response_schema"] = SPLIT_SCHEMA if stage == "split" else MERGE_SCHEMA
     if enforce_action_only:
-        prompt = prompt + _action_only_instruction(stage, allowed_actions)
+        prompt = _action_only_prompt(prompt, stage, allowed_actions)
     raw = call_vlm(
         prompt=prompt,
         images=images_b64,
@@ -238,7 +258,7 @@ def _compact_log_text(text: str, max_len: int = 220) -> str:
     return s[: max_len - 3] + "..."
 
 
-def main() -> None:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Evaluate action reproduction from finetune dataset.")
     parser.add_argument("--input-jsonl", default="output/finetune_dataset/finetune_dataset_mixed.jsonl")
     parser.add_argument("--dataset-root", default="output/finetune_dataset")
@@ -264,12 +284,25 @@ def main() -> None:
     )
     parser.add_argument("--enforce-action-only", action="store_true", default=True)
     parser.add_argument("--allow-reasoned-output", action="store_true")
-    parser.add_argument(
+    schema_group = parser.add_mutually_exclusive_group()
+    schema_group.add_argument(
         "--use-response-schema",
+        dest="use_response_schema",
         action="store_true",
-        help="Force structured output schema in API call; off by default to respect prompt format",
+        help="Force structured JSON output (default for reproducible action evaluation)",
     )
-    args = parser.parse_args()
+    schema_group.add_argument(
+        "--no-response-schema",
+        dest="use_response_schema",
+        action="store_false",
+        help="Disable structured output only for explicit legacy/compatibility experiments",
+    )
+    parser.set_defaults(use_response_schema=True)
+    return parser
+
+
+def main() -> None:
+    args = _build_parser().parse_args()
 
     input_jsonl = Path(args.input_jsonl)
     dataset_root = Path(args.dataset_root)
@@ -414,6 +447,9 @@ def main() -> None:
         "n_samples": len(results),
         "use_response_schema": args.use_response_schema,
         "enforce_action_only": enforce_action_only,
+        "output_protocol": (
+            ACTION_ONLY_PROTOCOL_VERSION if enforce_action_only else "reasoned-json-v1"
+        ),
         "enable_thinking": enable_thinking,
         "max_tokens": args.max_tokens,
         "vlm_extra_body_json": os.getenv("VLM_EXTRA_BODY_JSON", ""),

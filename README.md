@@ -151,8 +151,10 @@ distinct cluster rather than discarding it.
 
 Training and runtime now share the same Phase 1 observation contract: waveform
 overlay, ISI histogram, amplitude distribution, aggregation tree, and numeric
-ISI/amplitude metrics. The first local-student target is action-only JSON; an
-optional rationale remains compatible with runtime logging. Qwen/Gemma SFT
+ISI/amplitude metrics. Formal fixed-state evaluation now uses the versioned
+`action-only-json-v2` contract: exactly one JSON `action` field, no rationale,
+and a strict response schema. Legacy reasoned output remains available only as
+an explicit compatibility mode. Qwen/Gemma SFT
 splits are defined by inferred recording block, with the CH3/CH31 block held
 out from the default train/validation split.
 

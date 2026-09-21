@@ -125,7 +125,7 @@ files are excluded. Verify a downloaded bundle from inside its directory with
 - `plot_rag_backbone_unit_compare.py` — RAG/no-RAG bars + overall compare + step learning curves (Qwen/Gemma)
 
 ### `test/`
-- `eval_unit_actions_from_dataset.py` — unit-test style action accuracy
+- `eval_unit_actions_from_dataset.py` — fixed-state action accuracy with strict `action-only-json-v2` output by default; use `--no-response-schema` only for explicit legacy compatibility
 - `test_vlm_unit_decisions.py` — VLM decision unit tests
 
 ### `demo/`

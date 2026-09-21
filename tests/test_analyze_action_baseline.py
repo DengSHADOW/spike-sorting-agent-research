@@ -52,7 +52,8 @@ def test_action_metrics_and_format_accounting() -> None:
     assert report["per_action"]["SPLIT"]["recall"] == 0.0
     assert report["format"]["parsed_valid"] == 3
     assert report["format"]["valid_complete_json_action"] == 2
-    assert report["format"]["strict_single_action"] == 1
+    assert report["format"]["legacy_strict_single_token"] == 1
+    assert report["format"]["strict_action_only_json"] == 2
     assert report["format"]["recoverable_invalid_action_prefix"] == 1
     assert report["format"]["recoverable_invalid_correct"] == 1
     assert report["joined_sample_count"] == 4

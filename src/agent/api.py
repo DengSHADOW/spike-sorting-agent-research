@@ -302,9 +302,18 @@ def _call_vision_model(
             has_chat_kwargs = isinstance(provider_extra_body.get("chat_template_kwargs"), dict)
             if "gemma-4" in model_name and not has_chat_kwargs:
                 provider_extra_body["chat_template_kwargs"] = {"enable_thinking": False}
-            # vLLM structured outputs are commonly provided via guided decoding params.
             if response_schema is not None:
-                provider_extra_body["guided_json"] = response_schema
+                # vLLM 0.29 supports the OpenAI-compatible json_schema response
+                # format. Keep the constraint in the standard request field so
+                # local and hosted providers use the same output contract.
+                request["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "spike_sorting_decision",
+                        "schema": response_schema,
+                        "strict": True,
+                    },
+                }
         else:
             if response_schema is not None:
                 request["response_format"] = {

@@ -70,6 +70,18 @@ def _json_action(raw: str) -> str | None:
     return str(value["action"]).strip().upper()
 
 
+def _strict_action_only_json(raw: str, allowed: set[str]) -> bool:
+    try:
+        value = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return False
+    return (
+        isinstance(value, dict)
+        and set(value) == {"action"}
+        and str(value["action"]).strip().upper() in allowed
+    )
+
+
 def _recover_action_prefix(raw: str) -> str | None:
     match = re.search(r'["\']action["\']\s*:\s*["\']([A-Za-z_]+)', raw or "", re.IGNORECASE)
     return match.group(1).upper() if match else None
@@ -106,6 +118,7 @@ def analyze_predictions(
     }
     errors: list[dict[str, Any]] = []
     strict_count = 0
+    strict_json_count = 0
     json_valid_count = 0
     parsed_valid_count = 0
     recoverable_invalid_count = 0
@@ -121,6 +134,8 @@ def analyze_predictions(
             parsed_valid_count += 1
         if raw.strip().upper() == pred and pred in allowed:
             strict_count += 1
+        if _strict_action_only_json(raw, allowed):
+            strict_json_count += 1
         parsed_json_action = _json_action(raw)
         if parsed_json_action is not None and parsed_json_action in allowed:
             json_valid_count += 1
@@ -196,8 +211,10 @@ def analyze_predictions(
             "parsed_valid_rate": _safe_ratio(parsed_valid_count, n),
             "valid_complete_json_action": json_valid_count,
             "valid_complete_json_action_rate": _safe_ratio(json_valid_count, n),
-            "strict_single_action": strict_count,
-            "strict_single_action_rate": _safe_ratio(strict_count, n),
+            "legacy_strict_single_token": strict_count,
+            "legacy_strict_single_token_rate": _safe_ratio(strict_count, n),
+            "strict_action_only_json": strict_json_count,
+            "strict_action_only_json_rate": _safe_ratio(strict_json_count, n),
             "recoverable_invalid_action_prefix": recoverable_invalid_count,
             "recoverable_invalid_correct": recoverable_invalid_correct,
         },
