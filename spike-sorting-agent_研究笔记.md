@@ -1,6 +1,6 @@
 # spike-sorting-agent 研究笔记
 
-**最后更新**：2026-09-20
+**最后更新**：2026-09-21
 
 ## 项目目标
 
@@ -545,3 +545,28 @@ Qwen/Gemma 是仓库已有训练脚本支持的候选 baseline，并非 proposal
 - [ ] 补齐或明确派生 KEEP/NOT_MERGE，逐条保留 human/derived/API-teacher provenance。
 - [ ] 训练 action-only LoRA/SFT，再做 autonomous rollout；分别报告动作复现、终态质量、错误 DISCARD 和 abstention。
 - [ ] 基础结果稳定后再测试 API-teacher 增益与固定 train-memory RAG；DPO/RL 后置。
+
+---
+
+## 2026-09-21 — Runpod H100 真实图片 Qwen smoke
+
+- 已在 Runpod H100 80 GB 上建立可复用的 open-model 环境；代码、Python 环境、模型缓存和实验结果均位于 `/workspace` Network Volume，后续可停掉 H100 并将同一卷挂载到 A100 Pod。
+- 已完成 CH30 前 3 条人工动作状态的 base `Qwen/Qwen3.5-4B` fixed-state smoke。每条输入包含 4 张真实诊断图和数值指标；未调用 OpenAI API、未用 mock/RAG、未修改 MAT，也未执行 autonomous state update。
+- 三条人工动作均为 `DISCARD`；模型依次预测 `SPLIT / DISCARD / SPLIT`，命中 `1/3`。样本数和类别覆盖都不足，因此该结果只证明真实图片、vLLM、prompt、解析和结果收集链路可运行，不作为模型准确率结论。
+- 初步错误模式：base model 容易把 overcluster/ISI 指标解释为需要 `SPLIT`，而没有稳定复现专家的 `DISCARD`。需在 CH30 全 90 条上确认这是否为系统性偏置。
+- 三次响应均可解析为合法动作；但在 `enforce_action_only=true` 下仍返回了带 rationale 的 JSON，而非严格的单动作输出。全量 baseline 需同时报告 parsed-valid rate 和 exact-format compliance。
+- 运行前发现并修复了 Runpod 环境的可执行路径/CUDA 动态库路径问题；实验归档已校验并下载至 `output/runpod_collected/qwen35_ch30_real_image_smoke_h100_20260921/`。
+
+### 最新待办：真实数据线（高 → 低）
+
+- [ ] 在 CH30 全 90 条 fixed-state 样本上运行 base Qwen baseline；报告 per-action precision/recall/F1、macro-F1、confusion、parsed-invalid、abstention、exact-format compliance 和延迟。
+- [ ] 在相同 recording-block split 上建立 numeric-only Random Forest/gradient-boosted baseline，检验诊断图和 VLM 的增量价值。
+- [ ] 用同一小规模协议比较一个 Gemma base 候选，再冻结 SFT backbone。
+- [ ] 补齐或明确派生 KEEP/NOT_MERGE，逐条保留 human/derived/API-teacher provenance。
+- [ ] 训练 action-only LoRA/SFT；以 CH30 validation 选模，final-test block 仅在方案冻结后使用一次。
+- [ ] 在安全 runner 上执行 autonomous rollout，分别报告动作复现、终态质量、错误 DISCARD 和 abstention。
+- [ ] 基础结果稳定后再测试 API-teacher、固定 train-memory RAG 和公开 ground-truth benchmark；DPO/RL 后置。
+
+### 模拟数据线
+
+- 暂停；当前不继续投入运行或扩展。
