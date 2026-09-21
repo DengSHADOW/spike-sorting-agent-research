@@ -570,3 +570,29 @@ Qwen/Gemma 是仓库已有训练脚本支持的候选 baseline，并非 proposal
 ### 模拟数据线
 
 - 暂停；当前不继续投入运行或扩展。
+
+---
+
+## 2026-09-21 — CH30 全 90 条 base Qwen fixed-state baseline
+
+- 已在 Runpod H100 80 GB 上完成 CH30 全 90 条 expert edit-action 的首轮 fixed-state baseline；模型为未微调 `Qwen/Qwen3.5-4B`，输入使用真实诊断图和数值特征，未调用 API、mock/RAG，未修改 MAT，也未执行 autonomous state update。
+- GT 分布：DISCARD 41、MERGE 6、SPLIT 43；overall accuracy `36/90 = 0.400`，macro-F1 `0.531`。
+- DISCARD：precision `0.067`、recall `0.024`、F1 `0.036`；MERGE：`1.000/1.000/1.000`，但仅 6 条；SPLIT：precision `0.475`、recall `0.674`、F1 `0.558`。
+- 预测分布：DISCARD 15、MERGE 6、SPLIT 61、KEEP 5、INVALID_ACTION 3。41 个专家 DISCARD 中有 32 个被判为 SPLIT，证实 base model 存在明显 SPLIT 偏置，当前不能直接用于自主 curation。
+- 87/90 响应是可解析的完整 JSON；3 条因 64-token 截断成为无效 JSON。严格单动作格式遵从率为 0/90，因为模型全部输出了 JSON+rationale；ABSTAIN 为 0。
+- 本轮应视为首轮 diagnostic baseline：数据和推理链路有效，动作偏置结论有效；但正式跨模型/SFT 对比前，需统一 action-only prompt 与 response schema、禁止 rationale，并冻结协议后复跑。
+- 已关闭 vLLM、校验云端归档并下载到 `output/runpod_collected/qwen35_ch30_real_image_full90_h100_20260921/`；原始图片、权重和密钥未进入结果包。
+
+### 最新待办：真实数据线（高 → 低）
+
+- [ ] 修正并冻结 action-only 输出协议：prompt/schema 不冲突、禁止 rationale、消除 64-token 截断；复跑 CH30 90 条正式 base baseline。
+- [ ] 在相同 recording-block split 上建立 numeric-only Random Forest/gradient-boosted baseline。
+- [ ] 针对 DISCARD 低 recall 和 SPLIT 偏置做图像/数值 ablation，再以同一协议比较 Gemma base 候选。
+- [ ] 补齐或明确派生 KEEP/NOT_MERGE，保留 human/derived/API-teacher provenance。
+- [ ] 训练 action-only LoRA/SFT；以 CH30 validation 选模，final-test block 仅在方案冻结后使用一次。
+- [ ] 在安全 runner 上执行 autonomous rollout，分别报告动作复现、终态质量、错误 DISCARD 和 abstention。
+- [ ] 稳定后再进入 API-teacher、固定 train-memory RAG、公开 benchmark；DPO/RL 后置。
+
+### 模拟数据线
+
+- 暂停；当前不继续投入运行或扩展。
