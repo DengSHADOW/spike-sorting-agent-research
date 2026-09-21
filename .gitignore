@@ -34,6 +34,10 @@ wandb/
 Tianmin_Annotated_data/
 Jacob Bedke-Annotated_spike_sorting_data_w_chronux/
 
+# Personal career material; keep outside the project repository
+简历项目素材.md
+项目技能总结.md
+
 output/
 *output/
 

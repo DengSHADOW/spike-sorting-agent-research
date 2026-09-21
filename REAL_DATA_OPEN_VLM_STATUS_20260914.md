@@ -195,7 +195,7 @@ uv run python scripts/test/eval_unit_actions_from_dataset.py \
 
 ## 新 GitHub 仓库发布边界（2026-09-15 审计）
 
-- 当前 `origin` 仍是 `jiseshen/spike-sorting-agent`；不应 push 或改写该 remote。
+- 当前 `origin` 已改为 `DengSHADOW/spike-sorting-agent-research`；发布使用不携带旧大文件历史的 clean snapshot。原始 `jiseshen/spike-sorting-agent` 不再作为本地 `origin`。
 - 当前旧 Git 历史约 19 GiB，而已跟踪工作树文件约 248.5 MB，其中约 246.4 MB 是历史 `output/`。现在将 `output/` 加入 `.gitignore` 不会把这些已跟踪历史从旧仓库删掉。
 - 新仓库必须从当前工作树生成无旧历史的 clean snapshot，只包含源码、配置、测试和文档。
 - 必须排除 `.git/`、`.env*`、`.venv/`、`output/`、`data/`、两个外部真实数据目录、MAT/HDF5/FIG、压缩包和模型权重。`.env.example` 只保留空变量名和本地 endpoint 示例。

@@ -1,6 +1,6 @@
 # spike-sorting-agent 研究笔记
 
-**最后更新**：2026-09-15
+**最后更新**：2026-09-20
 
 ## 项目目标
 
@@ -500,3 +500,48 @@ Qwen/Gemma 是仓库已有训练脚本支持的候选 baseline，并非 proposal
 - [ ] 训练 action-only LoRA/SFT student；用 CH30 validation 选模型，最后只在 `cM2-e004_004-006` block 做 final test。
 - [ ] 完成自主 pipeline 评测，分开报告 action-level 与 cluster-level，并审计错误 merge/split 和 abstention。
 - [ ] baseline 稳定后再做固定 train-memory RAG；偏好数据与 reward 成熟后再考虑 DPO/RL。
+
+---
+
+## 2026-09-20 — 方法定义与历史/当前结果边界
+
+- 新增论文导向的方法与状态文档：`项目方法与实验状态.md`；统一说明研究范围、agent 状态/观察/动作/转移、真实数据 Phase、SFT、指标和外部 benchmark 条件。
+- 纠正“真实数据尚未使用 VLM”的过度表述：旧路线已在 CH3/20/30/31 上完成 GPT-4.1、GPT-5.1 和 no-metrics ablation 闭环，并保存 action log、诊断图、final assignments 和 cluster-level reports。
+- 旧 API-VLM 结果只作 preliminary/legacy evidence：它们使用 CH-only 路径、500/5,000 自动 discard 阈值、修复前失败语义和旧观察协议，不能替代当前 manifest/Qwen 主路线的正式 baseline。
+- 当前安全路线已完成 16 个有标注 MAT 的审计、1,374 条动作回放和 5,327 张图像导出；尚未完成开源 Qwen/Gemma inference、SFT 或修复后 autonomous rollout。
+- DISCARD 仍是正式模型动作；关闭的只是未经真实数据校准的自动数量 discard。明确合法的 VLM DISCARD 仍执行，provider/解析/无 merge target 失败则保留状态。
+- 当前内部 precision/recall/F1 可用于相同数据协议下的内部比较；外部 SOTA 声明前需加入 SpikeInterface 标准 spike-time/unit matching，并在公开 ground-truth benchmark 上比较。
+- 阈值实证复核：569 个人工 DISCARD 中仅 95 个源 cluster 小于 500，另有 8 个小于 500 的 cluster 被人工 MERGE；39 个人工最终 units 中有 3 个小于 5,000。因此 500/5,000 只能作待校准 heuristic/特征，不作真实数据默认硬删除。
+- CH30 旧闭环中 GPT-4.1 的 62 个动作与 GPT-5.1 的 22 个动作主要来自决策分岔：前者递归 SPLIT 更多，后者更早 DISCARD；两者最终都只保留 cluster 31（50,821 spikes）。动作少不代表更好，必须结合终态 recall 和错误丢弃评估。
+- 方法定位细化为 deterministic harness 管理的 multimodal sequential decision agent；真实主线当前是 human-supervised student policy，API teacher 仍是可选的 train-only 蒸馏/补标来源，不是 human ground truth。
+- 公开 benchmark 路线已明确：SpikeForest/SpikeInterface 适合标准终态评估，但需先固定 initial sorter 并为当前 hierarchy-specific SPLIT 接入状态/operator；AECuration 数据更适合单独 DISCARD/noise baseline，不是全动作轨迹。
+
+### 最新待办：真实数据线（高 → 低）
+
+- [ ] 在 Runpod A100 建立独立 open-model 环境。
+- [ ] 用 base Qwen3.5-4B 完成 CH30 3-sample fixed-state smoke；该步骤只验证多图、vLLM、JSON 和资源，不作为准确率结论。
+- [ ] 完成 CH30 全 90 条 expert edit-action baseline，报告 per-action precision/recall/F1、macro-F1、confusion、invalid-output 和 abstention。
+- [ ] 在同一小规模协议下比较一个 Gemma 候选，再冻结 SFT backbone。
+- [ ] 补齐或明确派生 KEEP/NOT_MERGE，并保留 human/derived/teacher provenance。
+- [ ] 训练 action-only LoRA/SFT；CH30 只用于 validation，final-test block 在方案冻结后使用一次。
+- [ ] 运行修复后的 autonomous rollout，并用标准化 action-level 与 cluster-level 指标评估。
+- [ ] 完成公开 ground-truth benchmark 后才能评估 post-curation SOTA；RAG、DPO/RL 均排在稳定 baseline/SFT 之后。
+
+---
+
+## 2026-09-21 — API teacher、SpikeInterface baseline 与 SpikeAgent 差异
+
+- API teacher 是通过 GPT/Claude API 对 student 动作给反馈或软标签的强模型。项目在模拟 Stage 3 和 `setting_002/ch_006` 两步 API smoke 中用过该机制；当前 runner 未向 teacher 传图，因此它实际是 GT-informed 文本 critic。旧真实 MAT 的 GPT 运行是 API policy 直接决策，不是 teacher 蒸馏。
+- 真实主线的 1,374 条动作仍以人工日志为监督；API teacher 后续只作为 train-only 补标/反馈与蒸馏对照，不作为测试真值或长期主系统。
+- 项目使用了 SpikeInterface 的 sorting/sorter/评估接口，但尚未使用其阈值或 model-based automated curation。应新增 numeric-only Random Forest/gradient-boosted baseline，检验 VLM 图像输入是否真正增加信息。
+- 若仅用 API VLM 看 waveform/ISI 做 Good/Noise 或 merge，会与 SpikeAgent 高度重合。差异方向应集中在：本地可训练 open VLM、专家有序编辑轨迹、显式状态转移、ABSTAIN/安全 DISCARD、recording-block 防泄漏，以及 action-level 与 terminal ground-truth 双层评估。
+- 权重更新方法中先做 LoRA/SFT，不先做 RL；但正式 SFT 前必须先完成 base Qwen baseline、numeric-only baseline，并补齐/派生可信的 KEEP/NOT_MERGE 负例。
+
+### 最新待办：真实数据线（高 → 低）
+
+- [ ] 在 Runpod A100 完成 base Qwen3.5-4B 的 CH30 3-sample smoke 和 90-sample fixed-state baseline。
+- [ ] 在相同 recording-block split 上建立 numeric-only Random Forest/gradient-boosted baseline，并确认所用 quality/template metrics。
+- [ ] 小规模比较一个 Gemma base 候选，冻结 student backbone。
+- [ ] 补齐或明确派生 KEEP/NOT_MERGE，逐条保留 human/derived/API-teacher provenance。
+- [ ] 训练 action-only LoRA/SFT，再做 autonomous rollout；分别报告动作复现、终态质量、错误 DISCARD 和 abstention。
+- [ ] 基础结果稳定后再测试 API-teacher 增益与固定 train-memory RAG；DPO/RL 后置。

@@ -158,6 +158,9 @@ out from the default train/validation split.
 
 The complete 2026-09-14 run record, data limitations, and open-model roadmap are
 documented in [`REAL_DATA_OPEN_VLM_STATUS_20260914.md`](REAL_DATA_OPEN_VLM_STATUS_20260914.md).
+The current method definition, evaluation terminology, legacy/current result
+boundary, and paper-oriented experiment plan are consolidated in
+[`项目方法与实验状态.md`](项目方法与实验状态.md).
 
 ---
 
