@@ -5,7 +5,35 @@
 **设备**：Runpod H100 80 GB  
 **评估对象**：`cM2-e008_021-028_CH30` 的 90 条人工 edit-action 状态
 
-## 1. 处理范围与证据
+> 当前用于后续模型对比的正式结果是 `action-only-json-v2`。本文保留首轮 legacy 运行的分析，用于审计协议修复前后的差异。
+
+## 0. 冻结协议后的正式 v2 结果
+
+2026-09-21 已在同一 H100、同一模型、同一 CH30 90 条样本上完成 `action-only-json-v2` 复跑。关闭 thinking，`max_tokens=32`，默认开启严格 JSON schema，每条只允许 `{"action":"ACTION"}`。
+
+| 指标 | 首轮 legacy diagnostic | 正式 `action-only-json-v2` |
+|---|---:|---:|
+| Accuracy | 36/90 = 0.400 | **34/90 = 0.378** |
+| Macro-F1 | 0.531 | **0.530** |
+| 可解析完整输出 | 87/90 | **90/90** |
+| 严格 action-only JSON | 0/90 | **90/90** |
+| 无效/截断输出 | 3 | **0** |
+| 预测分布 | D15 / M6 / S61 / K5 / invalid3 | **D17 / M6 / S54 / K13** |
+
+v2 的 action-level 结果：
+
+| 人工动作 | Support | Precision | Recall | F1 | Correct |
+|---|---:|---:|---:|---:|---:|
+| DISCARD | 41 | 0.059 | 0.024 | 0.034 | 1 |
+| MERGE | 6 | 1.000 | 1.000 | 1.000 | 6 |
+| SPLIT | 43 | 0.500 | 0.628 | 0.557 | 27 |
+| 总体 | 90 | — | — | macro-F1 0.530 | 34/90 |
+
+两次运行有 71/90 个预测一致，19/90 发生改变；5 条从对变错，3 条从错变对，净减 2 条。这说明结构化输出约束不只改变包装格式，也会轻微改变 base model 的动作分布，因此 prompt/schema 必须作为评测协议的固定部分。但核心结论没变：DISCARD 仍只命中 1/41，base Qwen 不能进入 autonomous rollout。
+
+正式归档位于 `output/runpod_collected/qwen35_ch30_action_v2_full90_h100_20260921/`；统一派生分析位于 `output/action_baseline_analysis/qwen35_ch30_action_v2_full90_20260921/`。
+
+## 1. 首轮 legacy 处理范围与证据
 
 - 输入：每个 SPLIT-stage 样本 4 张真实诊断图，每个 MERGE-stage 样本 3 张真实诊断图，同时包含数值指标。
 - 运行方式：固定人工 pre-action state 上逐样本推理；不是 autonomous rollout，不执行模型动作，也不改变 MAT。
@@ -104,7 +132,7 @@ Rationale 不是人工 ground truth，也不应作为正式 CoT 证据，但可�
 ## 7. 统一结论
 
 1. **工程链路成功**：真实多图输入、数值特征、H100/vLLM、90 条推理、日志和结果归档均正常，运行基础设施不再是阻塞项。
-2. **base Qwen 决策能力不足**：40.0% accuracy、DISCARD F1 0.036，且低于 54.4% 的同集 stage-majority 诊断参照，不能用于自主执行。
+2. **base Qwen 决策能力不足**：正式 v2 为 37.8% accuracy、DISCARD F1 0.034，且低于 54.4% 的同集 stage-majority 诊断参照，不能用于自主执行。
 3. **最严重风险是错误动作语义**：模型将“复杂但可继续拆分”和“应整体丢弃”混淆；若进入 rollout，会产生大量错误 SPLIT，并漏掉应 DISCARD 的噪声 cluster。
 4. **图像增益尚未证明**：CH30 标签被数值特征强烈分隔，必须与 numeric-only 和 image ablation 比较。
 5. **MERGE 结论受数据结构限制**：6/6 只证明能复现正例，不能证明会拒绝错误 merge。
@@ -121,10 +149,9 @@ Rationale 不是人工 ground truth，也不应作为正式 CoT 证据，但可�
 
 ## 9. 接下来的固定顺序
 
-1. **已完成代码修复**：`action-only-json-v2` 采用唯一结构化目标 `{"action":"..."}`，schema 禁止 rationale/额外字段，删除冲突 prompt，并默认启用标准 JSON schema；尚待真实 vLLM smoke 验证。
-2. 先做 3-sample schema smoke；格式 3/3 合规后复跑 CH30 90 条，形成可与其他模型直接比较的正式 base Qwen baseline。
-3. 只用 train recording 拟合 numeric-only Random Forest/gradient boosting，在 CH30 validation 上一次性评估。
-4. 做 numeric-only、images-only、combined ablation，判断 VLM 是否真正利用诊断图。
-5. 在相同协议下测试 Gemma；再根据效果、显存和格式稳定性选择 SFT backbone。
-6. 补 KEEP/NOT_MERGE 负例并保留 provenance 后，训练 action-only LoRA/SFT。
-7. 只有 fixed-state 的 DISCARD、安全性和负例指标合格后，才进入 autonomous rollout 和 cluster-level 评估。
+1. **已完成** `action-only-json-v2` 真实 vLLM 3-sample smoke 和 CH30 90 条正式复跑；严格格式合规率均为 100%。
+2. 只用 train recording 拟合 numeric-only Random Forest/gradient boosting，在 CH30 validation 上一次性评估。
+3. 做 numeric-only、images-only、combined ablation，判断 VLM 是否真正利用诊断图。
+4. 在相同协议下测试 Gemma；再根据效果、显存和格式稳定性选择 SFT backbone。
+5. 补 KEEP/NOT_MERGE 负例并保留 provenance 后，训练 action-only LoRA/SFT。
+6. 只有 fixed-state 的 DISCARD、安全性和负例指标合格后，才进入 autonomous rollout 和 cluster-level 评估。

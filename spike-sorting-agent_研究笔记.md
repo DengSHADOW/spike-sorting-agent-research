@@ -621,3 +621,26 @@ Qwen/Gemma 是仓库已有训练脚本支持的候选 baseline，并非 proposal
 ### 模拟数据线
 
 - 暂停；当前不继续投入运行或扩展。
+
+---
+
+## 2026-09-21 — `action-only-json-v2` 真实 H100 复跑
+
+- Runpod Pod 迁移后已恢复 H100 80 GB、Network Volume、Qwen 权重缓存和 vLLM 0.29 环境。新容器首次启动暴露 `PATH` 缺少虚拟环境 `ninja` 的问题；补齐 `PATH` 后启动成功，未重新下载模型。
+- 3-sample smoke 严格 action-only JSON 合规 `3/3`，无 rationale/截断；动作为 `SPLIT/SPLIT/SPLIT`，对三个人工 `DISCARD` 命中 `0/3`。smoke 只证明协议和服务兼容。
+- CH30 全 90 条正式 v2 baseline：accuracy `34/90 = 0.378`，macro-F1 `0.530`；90/90 可解析且严格只含 action 字段，无无效或截断输出。
+- v2 per-action：DISCARD P/R/F1 `0.059/0.024/0.034`（仅 1/41）；MERGE `1/1/1`（仅 6 个正例，无负例）；SPLIT `0.500/0.628/0.557`（27/43）。预测分布为 SPLIT 54、DISCARD 17、KEEP 13、MERGE 6。
+- 与 legacy 首轮相比：格式合规从 0/90 提升至 90/90，准确率从 36/90 变为 34/90；71 条预测相同、19 条改变。这说明协议问题已解决，但 base Qwen 的 DISCARD 决策能力仍不合格，不能进入 autonomous rollout。
+- 两个实验包已云端/本地双重 checksum 通过，位于 `output/runpod_collected/qwen35_ch30_action_v2_{smoke,full90}_h100_20260921/`；原始图片、模型权重和密钥未进入归档。vLLM 已关闭。
+
+### 最新待办：真实数据线（高 → 低）
+
+- [ ] 只用 train recording 拟合 numeric-only Random Forest/gradient-boosted baseline，在 CH30 validation 上固定评估。
+- [ ] 做 numeric-only、images-only、combined ablation，检验 VLM 诊断图的增量价值。
+- [ ] 在同一 `action-only-json-v2` 协议下小规模比较一个 Gemma base 候选。
+- [ ] 补齐或明确派生 KEEP/NOT_MERGE，保留 human/derived/API-teacher provenance。
+- [ ] 训练 action-only LoRA/SFT；只在 fixed-state 安全指标达标后进入 autonomous rollout。
+
+### 模拟数据线
+
+- 暂停；当前不继续投入运行或扩展。
