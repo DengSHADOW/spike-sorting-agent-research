@@ -582,6 +582,8 @@ Qwen/Gemma 是仓库已有训练脚本支持的候选 baseline，并非 proposal
 - 87/90 响应是可解析的完整 JSON；3 条因 64-token 截断成为无效 JSON。严格单动作格式遵从率为 0/90，因为模型全部输出了 JSON+rationale；ABSTAIN 为 0。
 - 本轮应视为首轮 diagnostic baseline：数据和推理链路有效，动作偏置结论有效；但正式跨模型/SFT 对比前，需统一 action-only prompt 与 response schema、禁止 rationale，并冻结协议后复跑。
 - 已关闭 vLLM、校验云端归档并下载到 `output/runpod_collected/qwen35_ch30_real_image_full90_h100_20260921/`；原始图片、权重和密钥未进入结果包。
+- 已完成统一分析，详见 `CH30_QWEN_BASELINE_ANALYSIS_20260921.md`；派生 JSON/CSV 位于 `output/action_baseline_analysis/qwen35_ch30_full90_20260921/`。3-sample smoke 是全量前三条且两次 raw response 完全一致，不与 90 条重复计数。
+- 同一评估集上的 stage-majority 诊断参照为 49/90（54.4%），高于 Qwen 的 40.0%；同集事后选择的单一 `n_spikes` 阈值可分对 SPLIT/DISCARD 80/84。二者均不能当正式 held-out baseline，但说明 numeric-only baseline 和 shortcut 审计必须先于 SFT。
 
 ### 最新待办：真实数据线（高 → 低）
 

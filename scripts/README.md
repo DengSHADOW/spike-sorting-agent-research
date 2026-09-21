@@ -107,6 +107,7 @@ files are excluded. Verify a downloaded bundle from inside its directory with
 `sha256sum -c checksums.sha256`.
 
 ### `analysis/`
+- `analyze_action_baseline.py` — generate a consistent action report with precision/recall/F1, confusion, format compliance, numeric summaries, and error cases
 - `compute_human_curation.py` — analyze human curation patterns
 - `evaluate_baseline.py` — evaluate baseline pipeline
 - `generate_curation_stats_table.py` — statistics tables
