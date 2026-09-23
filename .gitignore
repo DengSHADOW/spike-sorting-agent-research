@@ -15,6 +15,17 @@ wheels/
 data/
 *.mat
 *.csv
+*.npy
+*.npz
+*.jsonl
+*.xlsx
+*.xls
+*.parquet
+*.arrow
+*.feather
+*.joblib
+*.pkl
+*.pickle
 *.h5
 *.hdf5
 *.fig
@@ -24,11 +35,15 @@ data/
 
 # Local model weights and training caches
 checkpoints/
+models/
+model_cache/
 wandb/
 *.safetensors
 *.ckpt
 *.pth
 *.pt
+*.bin
+*.gguf
 
 # Local external datasets; keep them out of future repository uploads
 Tianmin_Annotated_data/

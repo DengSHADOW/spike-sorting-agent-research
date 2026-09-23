@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from src.agent.api import call_vlm
+from src.agent.api import call_vlm, get_last_call_meta
 from src.agent.runner import _sanitize_json_response
 
 
@@ -169,7 +169,12 @@ def _predict_action(
     max_tokens: int,
 ) -> Tuple[str, str]:
     kwargs: Dict[str, Any] = {}
-    kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": bool(enable_thinking)}}
+    # chat_template_kwargs is a local/OpenAI-compatible serving option.  Do not
+    # leak it into the official OpenAI or Anthropic request bodies.
+    if provider in {"vllm", "openrouter"}:
+        kwargs["extra_body"] = {
+            "chat_template_kwargs": {"enable_thinking": bool(enable_thinking)}
+        }
     if use_response_schema:
         if enforce_action_only:
             kwargs["response_schema"] = (
@@ -273,6 +278,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-samples", type=int, default=0)
     parser.add_argument("--output-dir", default="output/unit_test_dataset_eval")
     parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume from output-dir/partial_predictions.jsonl after an interrupted paid run.",
+    )
+    parser.add_argument(
         "--raw-log-file",
         default="",
         help="Optional path to append full raw LLM outputs for debugging.",
@@ -322,7 +332,16 @@ def main() -> None:
     if not rows:
         raise ValueError("No eval rows after filtering")
 
+    partial_path = output_dir / "partial_predictions.jsonl"
     results: List[Dict[str, Any]] = []
+    completed_ids = set()
+    if args.resume and partial_path.exists():
+        results = _read_jsonl(partial_path)
+        completed_ids = {str(r.get("id")) for r in results}
+        print(f"Resuming with {len(results)} completed predictions from {partial_path}", flush=True)
+    elif not args.resume:
+        with open(partial_path, "w") as f:
+            f.write("")
     raw_log_path = Path(args.raw_log_file) if args.raw_log_file else None
     if raw_log_path:
         raw_log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -330,6 +349,8 @@ def main() -> None:
             f.write("")
 
     for i, row in enumerate(rows, 1):
+        if str(row.get("id")) in completed_ids:
+            continue
         gt = str(row["label_action"]).upper()
         stage = str(row.get("stage", "split"))
         allowed_actions = _allowed_actions_for_row(row)
@@ -337,6 +358,7 @@ def main() -> None:
         if not imgs:
             pred = "MISSING_IMAGE"
             raw = ""
+            call_meta: Dict[str, Any] = {}
         else:
             pred, raw = _predict_action(
                 prompt=row["prompt"],
@@ -352,9 +374,10 @@ def main() -> None:
                 enforce_action_only=enforce_action_only,
                 max_tokens=args.max_tokens,
             )
+            call_meta = get_last_call_meta()
+        usage = call_meta.get("usage", {}) if isinstance(call_meta, dict) else {}
 
-        results.append(
-            {
+        result = {
                 "idx": i,
                 "id": row.get("id"),
                 "channel": row.get("channel"),
@@ -366,9 +389,17 @@ def main() -> None:
                 "gt_action": gt,
                 "pred_action": pred,
                 "match": int(pred == gt),
+                "actual_model": call_meta.get("actual_model", ""),
+                "input_tokens": usage.get("input_tokens", 0),
+                "cached_input_tokens": usage.get("cached_input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0),
+                "reasoning_output_tokens": usage.get("reasoning_output_tokens", 0),
+                "total_tokens": usage.get("total_tokens", 0),
                 "raw_response": raw,
             }
-        )
+        results.append(result)
+        with open(partial_path, "a") as f:
+            f.write(json.dumps(result) + "\n")
         line = f"[{i}/{len(rows)}] {row.get('id')} gt={gt} pred={pred} match={pred == gt}"
         if pred in {"INVALID_ACTION", "PARSE_ERROR"}:
             line += f" (llm_raw='{_compact_log_text(raw)}')"
@@ -453,6 +484,17 @@ def main() -> None:
         "enable_thinking": enable_thinking,
         "max_tokens": args.max_tokens,
         "vlm_extra_body_json": os.getenv("VLM_EXTRA_BODY_JSON", ""),
+        "resumed": bool(args.resume),
+        "usage": {
+            key: sum(int(r.get(key, 0) or 0) for r in results)
+            for key in (
+                "input_tokens",
+                "cached_input_tokens",
+                "output_tokens",
+                "reasoning_output_tokens",
+                "total_tokens",
+            )
+        },
     }
     with open(output_dir / "run_manifest.json", "w") as f:
         json.dump(run_manifest, f, indent=2)

@@ -26,6 +26,18 @@ from spikeinterface.qualitymetrics import (
 from pathlib import Path
 
 
+QUALITY_METRIC_COLUMNS = [
+    'cluster_id', 'n_spikes', 'firing_rate', 'isi_violations_rate',
+    'isi_violations_count', 'presence_ratio', 'amplitude_median',
+    'amplitude_cv', 'amplitude_cutoff', 'snr',
+]
+
+GROUND_TRUTH_COMPARISON_COLUMNS = [
+    'curated_id', 'matched_gt_id', 'agreement', 'n_curated_spikes',
+    'n_gt_spikes', 'tp', 'fp', 'fn', 'precision', 'recall', 'f1_score',
+]
+
+
 # =====================================================================
 # 1. QUALITY METRICS (SpikeInterface-based)
 # =====================================================================
@@ -122,7 +134,7 @@ def compute_quality_metrics(
             'snr': snr,
         })
     
-    return pd.DataFrame(metrics_list)
+    return pd.DataFrame(metrics_list, columns=QUALITY_METRIC_COLUMNS)
 
 
 def compute_amplitude_cutoff_single(amplitudes: np.ndarray, num_histogram_bins: int = 500) -> float:
@@ -270,7 +282,7 @@ def match_clusters_to_ground_truth(
             'f1_score': f1_score,
         })
     
-    return pd.DataFrame(results), total_gt_spikes
+    return pd.DataFrame(results, columns=GROUND_TRUTH_COMPARISON_COLUMNS), total_gt_spikes
 
 
 def compute_overall_performance(comparison_df: pd.DataFrame, total_gt_spikes: int) -> Dict[str, float]:
@@ -291,9 +303,10 @@ def compute_overall_performance(comparison_df: pd.DataFrame, total_gt_spikes: in
     Returns:
         Dict with aggregate metrics
     """
-    # Overall TP/FP (sum across curated clusters)
-    total_tp = comparison_df['tp'].sum()
-    total_fp = comparison_df['fp'].sum()
+    # Overall TP/FP (sum across curated clusters).  An empty prediction is a
+    # valid terminal state: it has no TP/FP and misses every GT spike.
+    total_tp = comparison_df['tp'].sum() if not comparison_df.empty else 0
+    total_fp = comparison_df['fp'].sum() if not comparison_df.empty else 0
     
     # Global FN: All GT spikes that were NOT correctly recalled
     # This includes:
@@ -306,13 +319,13 @@ def compute_overall_performance(comparison_df: pd.DataFrame, total_gt_spikes: in
     overall_f1 = 2 * (overall_precision * overall_recall) / (overall_precision + overall_recall) if (overall_precision + overall_recall) > 0 else 0.0
     
     # Mean metrics per cluster
-    mean_precision = comparison_df['precision'].mean()
-    mean_recall = comparison_df['recall'].mean()
-    mean_f1 = comparison_df['f1_score'].mean()
+    mean_precision = comparison_df['precision'].mean() if not comparison_df.empty else 0.0
+    mean_recall = comparison_df['recall'].mean() if not comparison_df.empty else 0.0
+    mean_f1 = comparison_df['f1_score'].mean() if not comparison_df.empty else 0.0
     
     # Number of clusters
     n_curated = len(comparison_df)
-    n_matched = comparison_df['matched_gt_id'].notna().sum()
+    n_matched = comparison_df['matched_gt_id'].notna().sum() if not comparison_df.empty else 0
     
     return {
         'n_curated_clusters': n_curated,
@@ -417,15 +430,18 @@ def generate_full_evaluation_report(
                 else:
                     return obj
             
+            def mean_or_zero(column: str) -> float:
+                return float(quality_metrics[column].mean()) if not quality_metrics.empty else 0.0
+
             json_report = {
                 'overall_performance': convert_to_native(overall_perf),
                 'quality_metrics_summary': {
                     'n_clusters': len(quality_metrics),
-                    'mean_firing_rate': float(quality_metrics['firing_rate'].mean()),
-                    'mean_isi_violations': float(quality_metrics['isi_violations_rate'].mean()),
-                    'mean_presence_ratio': float(quality_metrics['presence_ratio'].mean()),
-                    'mean_amplitude_cv': float(quality_metrics['amplitude_cv'].mean()),
-                    'mean_snr': float(quality_metrics['snr'].mean()),
+                    'mean_firing_rate': mean_or_zero('firing_rate'),
+                    'mean_isi_violations': mean_or_zero('isi_violations_rate'),
+                    'mean_presence_ratio': mean_or_zero('presence_ratio'),
+                    'mean_amplitude_cv': mean_or_zero('amplitude_cv'),
+                    'mean_snr': mean_or_zero('snr'),
                 },
             }
             with open(output_dir / 'evaluation_report.json', 'w') as f:

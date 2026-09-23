@@ -571,8 +571,6 @@ Qwen/Gemma 是仓库已有训练脚本支持的候选 baseline，并非 proposal
 
 - 暂停；当前不继续投入运行或扩展。
 
----
-
 ## 2026-09-21 — CH30 全 90 条 base Qwen fixed-state baseline
 
 - 已在 Runpod H100 80 GB 上完成 CH30 全 90 条 expert edit-action 的首轮 fixed-state baseline；模型为未微调 `Qwen/Qwen3.5-4B`，输入使用真实诊断图和数值特征，未调用 API、mock/RAG，未修改 MAT，也未执行 autonomous state update。
@@ -689,6 +687,84 @@ Qwen/Gemma 是仓库已有训练脚本支持的候选 baseline，并非 proposal
 - [ ] 以 Qwen3.5-9B 训练第一版 action-only LoRA/SFT，Gemma-4-E4B-it 仅作必要跨架构复核；CH30 用于 validation。
 - [ ] 仅在 fixed-state DISCARD、KEEP/NOT_MERGE 和 abstention 安全指标达标后进入 autonomous rollout；DISCARD 先 quarantine/可回滚。
 - [ ] 模型和协议冻结后，final-test block 只评估一次，再决定是否需要 API teacher、RAG、DPO/RL 或公开 benchmark 扩展。
+
+### 模拟数据线
+
+- 暂停；当前不继续投入运行或扩展。
+
+---
+
+## 2026-09-22 — 当前协议 OpenAI API-VLM 对照
+
+- 在同一份当前 CH30 MAT、同一 90 条 fixed-state 人工动作和 `action-only-json-v2` 下完成 GPT-4.1/GPT-5.1 API 对照；输入为真实诊断图和数值指标，预测不执行。
+- GPT-4.1：35/90，accuracy `0.389`，macro-F1 `0.575`，DISCARD `0/41`，SPLIT `29/43`，严格 JSON `90/90`。
+- GPT-5.1：33/90，accuracy `0.367`，macro-F1 `0.564`，DISCARD `0/41`，SPLIT `27/43`，严格 JSON `90/90`。
+- 两模型预测一致 `88/90`；都出现强 KEEP/SPLIT 偏置，没有复现专家 DISCARD。6/6 MERGE 仍只有正例。
+- GPT-4.1 使用 221,485 input / 530 output tokens；GPT-5.1 使用 184,225 input / 18,438 output tokens，其中 16,652 为 reasoning tokens。
+- 旧 GPT 闭环 F1 与当前 action accuracy 测量对象不同；当前结果说明 API 模型不能未经校准就作为 DISCARD teacher。
+- 评测脚本新增逐样本 checkpoint、`--resume`、实际模型版本与 token usage 记录；OpenAI 正式评测默认不再静默弱化 JSON schema。
+- 详细记录：`CH30_OPENAI_API_FIXED_STATE_20260922.md`。
+
+### 最新待办：真实数据线（高 → 低）
+
+- [ ] 冻结 SFT manifest，在相同 train blocks 上训练 Qwen3.5-9B images-only 与 images+numeric LoRA/SFT。
+- [ ] 在 CH30 比较监督式图像增量，重点报告 DISCARD 与 numeric RF `78/84` 基线。
+- [ ] 补齐或派生 KEEP/NOT_MERGE，保留 human/derived/teacher provenance。
+- [ ] fixed-state 安全指标达标后再做可回滚 DISCARD 的 autonomous rollout；最后只使用一次 final-test。
+
+---
+
+## 2026-09-22 — Prompt 协议复核与 legacy rollout 复现决策
+
+- 确认当前 CH30 fixed-state 对照与旧 GPT rollout 使用不同输入 prompt。当前样本沿用 finetune 导出器的 `gemma4_train_reasoned` 简化 profile；旧 rollout 使用明确的 neuronal morphology、split 和 merge 领域规则。
+- 该 profile 在首个可追溯 clean snapshot 中已存在，没有证据表明它是“为提高 Gemma 准确度而经验证的简化”。更准确的定性是：SFT 数据 profile 被直接复用于 fixed-state 评测。
+- `action-only` 输出约束保留；它与“删去输入领域规则”是两件事。后者可能导致 zero-shot VLM 的 KEEP/SPLIT 偏置，但没有单变量 prompt ablation 前不定量归因。
+- README 的 GPT-5.1 历史 aggregate 为 `P/R/F1=0.7653/0.8327/0.7671`；当前保存终态重评估为 `0.7735/0.8327/0.7718`。差异来自 CH31 的 FP 计数 `20,933` vs `18,065`；重评估不是新模型运行。
+- 主线暂时转为 legacy 结果复现：先统一重算已保存终态，再以 CH30 + GPT-5.1 做带旧详细 prompt 和旧数量阈值的完整 rollout；新结果使用独立输出目录，不覆盖旧实验。
+- 首次复现误用当前 500-waveform 绘图合约，CH30/211 从历史 `DISCARD` 变为 `SPLIT`，形成超过历史 11 次决策的长递归；在 20 个合法决策后主动停止。精确重放历史 CH30/211 prompt+三图时，同一实际模型版本再次输出 `DISCARD`，证明图像预处理是分叉的主要原因。
+- 旧 waveform overlay 为最多约 5,000 条波形，当前合约为 500 条确定性抽样。legacy 复现脚本已改为 5,000 条密度；保留当前安全失败语义，不修改主线 runner。
+- 后续完整审计修正：CH30/211 只能证明图像预处理足以改变单个动作；10 个 byte-identical 历史状态仍只有 7/10 一致，故总体差异还包含模型非确定性，不能再称图像是唯一或主要原因。最终结论以下一节为准。
+
+### 最新待办：真实数据线（高 → 低）
+
+- [ ] 用同一当前 evaluator 重算 GPT-4.1、GPT-5.1 和 no-metrics 的四通道终态，固定 historical/re-evaluated 口径。
+- [ ] 在独立目录运行 CH30 + GPT-5.1 `legacy-detailed-v1` autonomous rollout；开启 500/5,000 历史阈值，限制 API 决策数并保存逐步 checkpoint。
+- [ ] 与历史 CH30 `P/R/F1=1.0000/0.5578/0.7162`、终态 1 unit/50,821 spikes 及 11 次 VLM 决策比较。
+- [ ] CH30 复现通过后，再决定是否扩到 CH3/20/31；不直接批量付费运行。
+- [ ] legacy 复现后再恢复 SFT images-only/images+numeric 主线。
+
+### 模拟数据线
+
+- 暂停；当前不继续投入运行或扩展。
+
+---
+
+## 2026-09-22 — Legacy detailed-prompt 复现结论
+
+- current fixed-state 的简化输入 prompt 不是本轮为 Gemma 临时修改的；它来自已有 `gemma4_train_reasoned` SFT 导出 profile。仓库没有“为 Gemma 简化可提高准确率”的设计记录或实验依据。
+- `action-only` 输出与简化输入规则分开处理：前者用于避免不可靠 rationale 和截断，理由成立；后者是否有益尚未做同状态、同图、同模型的 prompt-only A/B。
+- Git object `03f68e5` 中的 source 与同 commit 的结果 artifact 不匹配：代码 prompt 比保存 prompt 更新，logger 文件名策略也不同；旧波形图还使用未保存 RNG 的随机 5,000 条抽样。因此无法严格恢复当时 source/RNG，只能以保存的 prompt/PNG 为最强证据。
+- CH30 10 个可恢复历史状态的 byte-identical replay：GPT-5.1 动作一致 `7/10 = 70%`。差异为 cluster 1 `DISCARD→SPLIT`、cluster 443 `KEEP→DISCARD`、phase2 455→31 `DISCARD→NOT_MERGE`。
+- 首个 artifact-recovered fresh rollout 从 `hierarchy.assigns` 开始，在 Phase 2 达到人为 20-call 成本上限停止：20 次成功 provider call、52,770 total tokens，没有终态。这不是 OpenAI、模型或算法的硬限制。
+- 按用户要求将上限提高到 100 后，一次全新 CH30 rollout 在 21 次成功 API 调用后自然结束；使用 53,191 total tokens，实际模型为 `gpt-5.1-2025-11-13`。
+- 新终态与历史 CH30 数值完全相同：1 个有效 cluster、50,821 assigned spikes、`P/R/F1=1.0000/0.5578/0.7162`。但 action trajectory 没有复现：新运行对 cluster 1 连续三次 `SPLIT`，对 305 先 `SPLIT`，对 353 经历 `KEEP→ABSTAIN`；额外分支最后被旧 `<5,000` 硬阈值清除。
+- 专业结论：成功数值复现了 **CH30 legacy controller 终态**，没有复现 **稳定的 VLM 决策 policy**。不同轨迹之所以到达相同终点，主要是历史 500/5,000 数量阈值消除了额外分支；因此不能把 F1 归因于稳定 prompt/VLM 推理，也不据此声称 SOTA。
+- 后续关闭总 VLM 调用数上限，补跑 CH3、CH20、CH31，并与已完成 CH30 统一汇总。保留单状态 3 次 parse retry、provider 失败即停、`ABSTAIN` 和 checkpoint；不覆盖旧结果，不修改 MAT。
+- 四通道均自然结束：CH3 `9 calls/23,242 tokens`，CH20 `7/18,456`，CH30 `21/53,191`，CH31 `58/144,781`；共 95 calls/239,670 tokens。
+- 新结果：CH3 `0 units, F1=0`；CH20 `0 units, F1=0`；CH30 `1 unit, F1=0.7162`；CH31 `2 units, F1=0.8521`。四通道平均 `P/R/F1=0.4489/0.3688/0.3921`，对比保存历史报告 `0.7735/0.8327/0.7718`；仅 CH30 final assignments 完全一致。
+- CH3 暴露空预测评估 bug：0 units 时空 DataFrame 没有 `tp` 列。已修复为 `TP=0, FP=0, FN=全部 GT, P/R/F1=0`，从保存的 final assignments 离线补齐报告，没有重跑 API。
+- 四通道结论：历史 GPT-5.1 结果不能作为稳定 policy 复现；旧 500/5,000 阈值在 CH30 使不同轨迹收敛，但在 CH3 清空所有 units。因此旧 aggregate 只作 preliminary legacy evidence，不作 SOTA 或当前主线基线。
+- 全部 legacy 复现调查累计 386,369 total tokens；其中四条完整 fresh rollout 为 239,670。统一报告见 `LEGACY_FULL_ROLLOUT_ALL_CHANNELS_20260922.md`，机读汇总位于 `output/legacy_reproduction/full_rollout_summary_20260922/`。
+
+### 最新待办：真实数据线（高 → 低）
+
+- [ ] 停止扩跑 legacy GPT controller；回到 leakage-free student 主线。
+- [ ] 回到 leakage-free SFT 主线：冻结真实数据 manifest、train/CH30-validation/final-test recording-block 划分和 action provenance。
+- [ ] 在相同 train blocks 上训练 Qwen3.5-9B images-only 与 images+numeric action-only LoRA/SFT；以锁定的 numeric RF 为主要门槛。
+- [ ] 在 CH30 validation 报告 overall、macro-F1、DISCARD recall、abstention，并明确 merge 仍缺 NOT_MERGE 负例。
+- [ ] 只有 fixed-state 安全指标达标后，才做带 checkpoint、调用上限、错误 DISCARD quarantine 的 autonomous rollout。
+- [ ] prompt-only A/B 作为独立 ablation：冻结状态、图片 bytes、模型版本和输出协议，只替换 minimal 与 detailed/domain-policy 输入；不与 SFT 主实验混跑。
+- [ ] 模型与协议冻结后只使用一次 final-test；之后再决定 RAG/DPO/RL 或公开 benchmark。
 
 ### 模拟数据线
 

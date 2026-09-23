@@ -108,36 +108,137 @@ The later corrected Stage 3-5 mock rebuild contains 82 trajectory and memory
 rows. The separate 84-row RAG artifact is retained as an earlier integration
 test, not as the current canonical Stage 3 trajectory.
 
-### Retained real-data results
+### Real-data inventory and provenance
 
-The legacy MATLAB-data experiments cover CH3, CH20, CH30, and CH31. The table
-reports the mean of each channel-level overall metric from the retained
-aggregate reports.
+The following table contains **summary statistics only**. Raw recordings,
+MATLAB files, generated images, per-sample rows, model weights, and experiment
+outputs are local assets and are not included in Git.
 
-| Method | Precision | Recall | F1 |
+| Item | Audited count | Interpretation |
+|---|---:|---|
+| Current-format MAT datasets | 17 | Five inferred recording blocks; full `recording_block + channel` is the dataset ID |
+| Spike events | 4,469,063 | Total across the 17 current-format MAT files |
+| Labeled datasets | 16 | Have an action source and final `curation.assigns` |
+| Unlabeled datasets | 1 | `cM2-e004_001-003_CH5`; inference/manual-annotation pool only |
+| Replayable human edit actions | 1,374 | 636 `SPLIT`, 569 `DISCARD`, 169 `MERGE` |
+| Human rationale rows | 241 | Remaining 1,133 actions have an action label but no reliable rationale |
+| Regenerated diagnostic images | 5,327 | About 486 MiB locally; generated inputs, not repository assets |
+| Unified action/terminal datasets | 2 | CH3 and CH31 in `cM2-e004_004-006`; replay exactly reaches the MAT terminal state |
+| Separate action/terminal datasets | 14 | Valid for separate action-level and cluster-level evaluation, not a unified trajectory claim |
+| Duplicate MAT files | 4 | Tianmin copies are SHA-256-identical to corresponding Jacob files and are counted once |
+
+The default leakage-aware split keeps every channel from an inferred recording
+block in one fold:
+
+| Split | Inferred recording blocks | Actions | Current use |
+|---|---|---:|---|
+| Train | `cM2-e004_001-003`, `cM2-e004_011-015`, `cM2-e007_012-017` | 973 | Action-only SFT and train-only model selection |
+| Validation | `cM2-e008_021-028` | 90 | CH30 base/SFT comparison and model selection |
+| Final test | `cM2-e004_004-006` | 311 | Reserved for one evaluation after model and protocol freeze |
+
+Recording/session identity is inferred from directory names and has not yet
+been confirmed by the provider. This split is safer than random channel/sample
+splitting but must still be reported as provisional. The action labels come
+from ordered Excel sheets or `spikes.curation.action(s)` inside MAT files;
+terminal cluster labels come from `spikes.curation.assigns`. Provenance and
+SHA-256 hashes are recorded by the local manifest pipeline.
+
+Repository data policy:
+
+| Local asset | Typical local location | Git policy |
+|---|---|---|
+| Raw/current-format MAT data | `data/`, `Tianmin_Annotated_data/`, `Jacob Bedke-.../` | Ignored; never commit |
+| Per-sample JSONL and 5,327 PNG inputs | `output/real_manifest_action_dataset_*/` | Ignored; regenerate locally |
+| Rollout predictions and reports | `output/` | Ignored; only aggregate numbers/methodology are documented |
+| LoRA/model weights and caches | `checkpoints/`, `models/`, `wandb/` | Ignored; distribute separately if authorized |
+| API credentials | `.env` | Ignored; `.env.example` may contain names only, never secrets |
+
+At the current commit boundary, Git tracks no MAT/NPY/NPZ/JSONL/CSV/Excel,
+model-weight, or per-run output files. Three tracked PNG files under `figures/`
+are documentation figures, not source recordings or per-sample model inputs.
+
+### Historical real-data artifacts
+
+The retained legacy MATLAB experiments cover CH3, CH20, CH30, and CH31. The
+table below is a re-evaluation of the saved terminal assignments with the
+current metric implementation where possible. These are **historical
+artifacts**, not a stable current baseline.
+
+| Method | Mean precision | Mean recall | Mean F1 |
 |---|---:|---:|---:|
 | Before curation | 0.2247 | 0.8855 | 0.3536 |
 | VLM + heuristic baseline | 0.2327 | 1.0000 | 0.3712 |
-| GPT-4.1 curation | 0.5479 | 0.8606 | 0.5861 |
-| GPT-5.1 curation | **0.7653** | 0.8327 | **0.7671** |
-| GPT-5.1 without numeric metrics | 0.6315 | 0.8244 | 0.6624 |
-| Human-curated reference | 1.0000 | 1.0000 | 1.0000 |
+| Retained GPT-4.1 terminal assignments | 0.5479 | 0.8606 | 0.5861 |
+| Retained GPT-5.1 terminal assignments | 0.7735 | 0.8327 | 0.7718 |
+| Retained GPT-5.1 no-metrics assignments | 0.6315 | 0.8244 | 0.6624 |
+| Human-curated reference target | 1.0000 | 1.0000 | 1.0000 |
 
-Within the retained VLM runs, GPT-5.1 has the strongest mean F1. Removing
-numeric metrics reduces mean F1 from `0.7671` to `0.6624`, supporting the use of
-waveform/quality measurements alongside images. The human row is the curated
-reference target, not an independent blind human benchmark. The source MAT
-files are not version-controlled. They are currently available only in the
-local `Tianmin_Annotated_data/` and
-`Jacob Bedke-Annotated_spike_sorting_data_w_chronux/` directories.
+The older README aggregate reported GPT-5.1 as
+`P/R/F1=0.7653/0.8327/0.7671`; the current-artifact re-evaluation is
+`0.7735/0.8327/0.7718`. The discrepancy comes from the retained CH31
+false-positive count. Neither number is a new model run. The exact historical
+source revision and random waveform subsets are unavailable, and the legacy
+controller used uncalibrated `<500` and `<5,000` spike-count filters. Therefore
+the apparent no-metrics difference is observational legacy evidence, not a
+controlled image-versus-numeric ablation or proof of numeric-feature benefit.
 
-A read-only audit of the local real data on 2026-09-02 found 17 current-format
-MAT files (4,469,063 spikes): 16 have final curation labels and executable
-internal action logs, while one CH5 file has no curation target. The four MAT
-files under `Tianmin_Annotated_data/` are byte-identical duplicates of four
-Jacob files. CH3 and CH31 have Excel action sources that replay exactly to the
-matching final labels; the other curated files remain valid as separate
-action-level and cluster-level targets rather than a single unified trajectory.
+### Current CH30 fixed-state action evaluation
+
+The current action-level benchmark contains 90 logged human edits from the
+provided CH30 Excel action sheet: 41 `DISCARD`, 43 `SPLIT`, and 6 `MERGE`.
+Each prediction uses the correct human pre-action state and is scored without
+being executed. The log contains no human `KEEP` or `NOT_MERGE` labels, so this
+is an **expert edit-action imitation** benchmark, not a complete curation-policy
+benchmark. The repository does not identify the individual human annotator.
+The CH30 Excel trajectory and MAT terminal assignment are marked
+`separate_action_and_terminal`, so they must not be presented as one unified
+ground-truth curation pass.
+
+| Model | Action accuracy | Macro-F1 | DISCARD recall |
+|---|---:|---:|---:|
+| Qwen3.5-2B base | 0.067 | 0.333 | 0.000 |
+| Qwen3.5-4B base | 0.378 | 0.530 | 0.024 |
+| Qwen3.5-9B base | 0.500 | 0.570 | 0.000 |
+| Gemma-4-E4B-it base | 0.544 | 0.578 | 0.000 |
+| GPT-4.1 API | 35/90 = 0.389 | 0.575 | 0/41 = 0.000 |
+| GPT-5.1 API | 33/90 = 0.367 | 0.564 | 0/41 = 0.000 |
+| Numeric-only Random Forest | 84/90 = 0.933 | 0.952 | 0.854 |
+
+All VLM rows use the same 90 fixed states and strict action-only outputs. The
+supervised Random Forest was trained on 831 split-stage actions from three
+non-overlapping recording blocks, so its advantage over zero-shot VLMs does
+not establish that images are unnecessary. A fair image-value test still
+requires supervised numeric-only, images-only, and combined models trained on
+the same blocks. The six `MERGE` labels are positive-only; no current result
+demonstrates rejection of an incorrect merge.
+
+### Fresh legacy autonomous-rollout audit
+
+GPT-5.1 was also rerun from each channel's initial assignments with the
+artifact-recovered detailed prompt and legacy controller. There was no total
+API-call cap; actions were executed and changed subsequent states.
+
+| Channel | API calls | Final units | Precision | Recall | F1 | Exact historical assignment |
+|---|---:|---:|---:|---:|---:|---:|
+| CH3 | 9 | 0 | 0.0000 | 0.0000 | 0.0000 | No |
+| CH20 | 7 | 0 | 0.0000 | 0.0000 | 0.0000 | No |
+| CH30 | 21 | 1 | 1.0000 | 0.5578 | 0.7162 | Yes |
+| CH31 | 58 | 2 | 0.7955 | 0.9173 | 0.8521 | No |
+| **Mean** | **95 total** | — | **0.4489** | **0.3688** | **0.3921** | **1/4** |
+
+The fresh mean F1 (`0.3921`) is far below the retained historical mean
+(`0.7718`). CH3 and CH20 collapsed to zero final units. CH30 reached the exact
+historical endpoint through a different action trajectory because the legacy
+`<5,000` filter removed the extra branches. CH31 used 58 calls and obtained a
+higher F1 than its retained result, but its final assignments differed. The
+legacy GPT-5.1 result is therefore not reproducible as a stable VLM policy and
+must not be presented as SOTA or as the current project baseline. Full details
+are in
+[`LEGACY_FULL_ROLLOUT_ALL_CHANNELS_20260922.md`](LEGACY_FULL_ROLLOUT_ALL_CHANNELS_20260922.md).
+
+The human reference is a target derived from the provided curation data, not
+an independent blind human benchmark. The large source MAT directories and API
+credentials are local-only and are not version-controlled.
 
 ### Safe real-data student path
 
@@ -154,9 +255,12 @@ overlay, ISI histogram, amplitude distribution, aggregation tree, and numeric
 ISI/amplitude metrics. Formal fixed-state evaluation now uses the versioned
 `action-only-json-v2` contract: exactly one JSON `action` field, no rationale,
 and a strict response schema. Legacy reasoned output remains available only as
-an explicit compatibility mode. Qwen/Gemma SFT
-splits are defined by inferred recording block, with the CH3/CH31 block held
-out from the default train/validation split.
+an explicit compatibility mode. The leakage-aware split uses three recording
+blocks for training, `cM2-e008_021-028`/CH30 for validation, and
+`cM2-e004_004-006` as an unused final-test block. The next main experiment is
+an action-only Qwen3.5-9B LoRA/SFT comparison of images-only versus
+images-plus-numeric inputs under this frozen split; autonomous execution is
+deferred until fixed-state DISCARD and negative-merge safety are adequate.
 
 The complete 2026-09-14 run record, data limitations, and open-model roadmap are
 documented in [`REAL_DATA_OPEN_VLM_STATUS_20260914.md`](REAL_DATA_OPEN_VLM_STATUS_20260914.md).

@@ -341,9 +341,17 @@ def _call_vision_model(
         try:
             response = client.chat.completions.create(**request)
         except Exception as e:
-            # Fallback for providers/models that do not support json_schema response_format
+            # A formal action evaluation must not silently weaken its output
+            # contract after any provider error.  Legacy callers can opt in to
+            # the old json_object compatibility retry explicitly.
+            allow_schema_fallback = os.getenv("VLM_ALLOW_SCHEMA_FALLBACK", "").lower() in {
+                "1",
+                "true",
+                "yes",
+            }
             if (
-                provider_name != "vllm"
+                allow_schema_fallback
+                and provider_name != "vllm"
                 and "response_format" in request
                 and response_schema is not None
             ):
