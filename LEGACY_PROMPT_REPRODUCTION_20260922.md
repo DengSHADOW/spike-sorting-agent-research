@@ -1,5 +1,9 @@
 # Legacy GPT-5.1 prompt/rollout reproduction — 2026-09-22
 
+> **Scope correction:** this report is specifically a reproduction of the
+> strict prompt retained in CH30 output artifacts. It must not be treated as the
+> common prompt used for CH3/CH20/CH31 or as a four-channel protocol.
+
 ## Objective
 
 Determine whether the historical GPT-5.1 real-data result can be reproduced with the detailed curation prompt used by the retained CH30 artifacts. This is separate from the current 90-sample `action-only-json-v2` fixed-state benchmark.
@@ -12,7 +16,7 @@ Determine whether the historical GPT-5.1 real-data result can be reproduced with
 - Actual current API model: `gpt-5.1-2025-11-13`.
 - Reproduction safety differences: provider failure stops instead of using mock; an exhausted parse retry becomes `ABSTAIN`; retained historical outputs are never overwritten.
 
-The exact historical source revision is not recoverable. Git object `03f68e5` contains the result artifacts, but its checked-in prompt already differs from the prompt files inside those artifacts, and its VLM logger uses unique call suffixes whereas the saved CH30 files overwrite repeated cluster IDs. The old waveform implementation used unseeded `numpy.random.choice` over at most 5,000 waveforms, so the original random subset is also unavailable. The retained prompt/PNG bytes are therefore the strongest available source of truth.
+The exact source revision that produced the strict CH30 artifacts is not recoverable. Git object `03f68e5` contains those artifacts, but its checked-in prompt is the more cautious shared version and its VLM logger uses unique call suffixes whereas the saved CH30 files overwrite repeated cluster IDs. The old waveform implementation used unseeded `numpy.random.choice` over at most 5,000 waveforms, so the original random subset is also unavailable. For CH30 specifically, the retained prompt/PNG bytes are therefore the strongest available run-level evidence.
 
 The current fixed-state prompt was not simplified during this reproduction. It originated from the pre-existing `gemma4_train_reasoned` SFT-export profile. The repository contains no controlled evidence that simplifying the input prompt was intended to improve Gemma or that it improved accuracy. `action-only` output and simplified input rules must be treated as separate design choices.
 
@@ -95,7 +99,7 @@ Complete-run usage: 21 API calls, 41,873 input tokens (1,536 cached), 11,318 out
 
 ## Decision
 
-The requested CH30 complete reproduction attempt is finished. Its terminal output matches the saved CH30 result exactly, but its action policy does not. Do not generalize this one endpoint match into a stable-policy or SOTA claim. This report originally recommended against expanding to CH3/20/31; the user subsequently requested an unlimited all-channel run, recorded separately in `LEGACY_FULL_ROLLOUT_ALL_CHANNELS_20260922.md`. Return the main line to leakage-free supervised experiments after that audit.
+The requested CH30 complete reproduction attempt is finished. Its terminal output matches the saved CH30 result exactly, but its action policy does not. Do not generalize this one endpoint match into a stable-policy or SOTA claim. A later all-channel run mistakenly reused this CH30-specific prompt and is retained as a protocol-mismatch audit in `LEGACY_FULL_ROLLOUT_ALL_CHANNELS_20260922.md`; it is not a faithful reproduction. Return the main line to leakage-free supervised experiments after correcting the protocol record.
 
 Artifacts:
 

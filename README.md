@@ -212,11 +212,15 @@ requires supervised numeric-only, images-only, and combined models trained on
 the same blocks. The six `MERGE` labels are positive-only; no current result
 demonstrates rejection of an incorrect merge.
 
-### Fresh legacy autonomous-rollout audit
+### Invalid cross-channel strict-prompt run (retained for audit)
 
-GPT-5.1 was also rerun from each channel's initial assignments with the
-artifact-recovered detailed prompt and legacy controller. There was no total
-API-call cap; actions were executed and changed subsequent states.
+GPT-5.1 was rerun from each channel's initial assignments with a strict prompt
+recovered from the retained CH30 artifacts. Subsequent forensic comparison
+showed that this was **not** the shared prompt checked into JianZhi's source and
+used by the call-suffixed CH3/CH20/CH31 artifacts. It was therefore a
+cross-channel strict-prompt stress test, not a faithful four-channel
+reproduction. There was no total API-call cap; actions were executed and
+changed subsequent states.
 
 | Channel | API calls | Final units | Precision | Recall | F1 | Exact historical assignment |
 |---|---:|---:|---:|---:|---:|---:|
@@ -226,14 +230,13 @@ API-call cap; actions were executed and changed subsequent states.
 | CH31 | 58 | 2 | 0.7955 | 0.9173 | 0.8521 | No |
 | **Mean** | **95 total** | — | **0.4489** | **0.3688** | **0.3921** | **1/4** |
 
-The fresh mean F1 (`0.3921`) is far below the retained historical mean
-(`0.7718`). CH3 and CH20 collapsed to zero final units. CH30 reached the exact
-historical endpoint through a different action trajectory because the legacy
-`<5,000` filter removed the extra branches. CH31 used 58 calls and obtained a
-higher F1 than its retained result, but its final assignments differed. The
-legacy GPT-5.1 result is therefore not reproducible as a stable VLM policy and
-must not be presented as SOTA or as the current project baseline. Full details
-are in
+The numbers above describe that strict-prompt run only. They cannot be used to
+claim that JianZhi's historical four-channel policy failed reproduction,
+because CH3, CH20, and the final call-suffixed CH31 run used the more cautious
+shared source prompt. CH30 remains a valid reproduction attempt for its own
+retained strict-prompt artifacts: it reached the same endpoint through a
+different trajectory. Neither historical nor fresh legacy numbers are a SOTA
+claim or the current project baseline. Full details and the correction are in
 [`LEGACY_FULL_ROLLOUT_ALL_CHANNELS_20260922.md`](LEGACY_FULL_ROLLOUT_ALL_CHANNELS_20260922.md).
 
 The human reference is a target derived from the provided curation data, not

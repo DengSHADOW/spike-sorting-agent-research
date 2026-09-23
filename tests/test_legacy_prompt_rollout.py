@@ -1,3 +1,4 @@
+import hashlib
 import importlib.util
 import sys
 from pathlib import Path
@@ -24,19 +25,17 @@ def test_phase1_prompt_matches_legacy_contract() -> None:
     assert "73 overclusters" in prompt
     assert "high violations > 0.006" in prompt
     assert '"KEEP" | "DISCARD" | "SPLIT"' in prompt
+    assert "natural waveform variability" in prompt
+    assert "Do NOT hallucinate baseline shift" in prompt
+    assert "DISCARD immediately" not in prompt
     assert "amplitude_cv" not in prompt
 
 
-def test_phase1_prompt_matches_retained_artifact_byte_for_byte() -> None:
-    artifact = (
-        Path(__file__).resolve().parents[1]
-        / "output"
-        / "main_gpt-5.1"
-        / "CH30"
-        / "vlm_inputs"
-        / "phase1_cluster_211_prompt.txt"
+def test_phase1_prompt_matches_retained_artifact_digest() -> None:
+    prompt = MODULE.build_legacy_phase1_prompt(1, 88796, 266)
+    assert hashlib.sha256(prompt.encode()).hexdigest() == (
+        "dd70b6561107c3c70701d3173ac3b105abfaa94b3569790bdd79488eecdb4e29"
     )
-    assert MODULE.build_legacy_phase1_prompt(211, 26939, 73) == artifact.read_text()
 
 
 def test_phase2_prompt_preserves_historical_wording() -> None:
@@ -54,6 +53,22 @@ def test_phase2_prompt_preserves_historical_wording() -> None:
     assert "NOT_MERGE\" for ALL large clusters" in prompt
     assert "Waveform correlation: -0.047" in prompt
     assert '"MERGE" | "NOT_MERGE" | "DISCARD"' in prompt
+
+
+def test_phase2_prompt_matches_retained_source_prompt_artifact_digest() -> None:
+    prompt = MODULE.build_legacy_phase2_prompt(
+        small_cluster_id=31,
+        n_small=1228,
+        small_isi_rate=0.0024,
+        large_cluster_id=1,
+        n_large=18774,
+        large_isi_rate=0.0036,
+        correlation=0.712,
+        merged_isi_rate=0.0039,
+    )
+    assert hashlib.sha256(prompt.encode()).hexdigest() == (
+        "c8e7a2c7f3e2e20f3f68e5033f4131a5a9448a0e5f534fe2c621fdb21a6ef35d"
+    )
 
 
 def test_decision_recorder_enforces_budget(tmp_path: Path) -> None:

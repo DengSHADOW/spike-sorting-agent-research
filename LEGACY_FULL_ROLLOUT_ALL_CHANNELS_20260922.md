@@ -1,22 +1,29 @@
-# Legacy GPT-5.1 full autonomous rollouts — all real channels (2026-09-22)
+# Cross-channel strict-prompt autonomous rollouts — protocol-mismatch audit (2026-09-22)
+
+> **Retrospective correction:** this run mistakenly applied the strict prompt
+> retained in CH30 artifacts to CH3, CH20, and CH31. JianZhi's checked-in
+> `src/agent_context.py` defines one more cautious shared prompt, and that text
+> matches the call-suffixed CH3/CH20/CH31 artifacts byte-for-byte. Consequently,
+> the results below are retained as a strict-prompt stress test and cost/audit
+> record, but are invalid as a faithful four-channel reproduction.
 
 ## Question
 
-Can the retained historical GPT-5.1 real-data results be reproduced by rerunning the full legacy curation controller on all four available annotated channels?
+What happened when the CH30 strict artifact prompt was applied across all four available annotated channels? This no longer answers whether JianZhi's original shared-prompt results reproduce.
 
 ## Frozen protocol
 
 - Channels: CH3, CH20, CH30, CH31.
 - Start state: each MAT file's original `hierarchy.assigns`.
 - Model: requested `gpt-5.1`; actual served model `gpt-5.1-2025-11-13`.
-- Input: artifact-recovered detailed domain prompt; Phase 1 waveform/ISI/tree images and Phase 2 small-waveform/large-waveform/merged-ISI images.
+- Input actually used: strict detailed prompt recovered from CH30 artifacts; Phase 1 waveform/ISI/tree images and Phase 2 small-waveform/large-waveform/merged-ISI images.
 - Rendering: recoverable old unseeded random overlay of at most 5,000 waveforms. The original RNG states are unavailable.
 - Controller thresholds: auto-discard `<500`, small/large boundary `4,000`, final discard `<5,000`.
 - No total VLM-attempt limit. Per-state legacy JSON parsing still permits at most three attempts before `ABSTAIN`.
 - Current safety semantics remain enabled: provider errors stop instead of falling back to mock; parse exhaustion becomes `ABSTAIN`; all-`NOT_MERGE` preserves a distinct cluster before the final filter.
 - Runs use isolated output directories and never modify MAT files or retained historical results.
 
-This is a complete best-effort reproduction of the recoverable controller, not exact source/RNG reproduction. The initial Git object contains source code that does not match its retained result artifacts.
+This is not a common-protocol reproduction. The initial Git object contains a shared cautious source prompt, while its retained output directory mixes that prompt with a stricter CH30-era revision and stale CH31 files. The original RNG states are also unavailable.
 
 ## Results
 
@@ -39,11 +46,11 @@ The historical comparison column uses the currently retained `evaluation_report.
 
 ## Main conclusions
 
-1. The historical four-channel GPT-5.1 result is **not reproducible as a stable VLM policy**. Only one of four final assignment arrays matched exactly.
-2. The four-channel mean F1 fell from retained historical `0.7718` to `0.3921`; CH3 and CH20 collapsed to zero units. Therefore the historical aggregate must remain preliminary legacy evidence, not a stable baseline or SOTA result.
+1. This run cannot determine whether the historical four-channel GPT-5.1 result is reproducible, because three channels were tested with the wrong prompt revision.
+2. The mean F1 change from retained historical `0.7718` to `0.3921` is a confounded cross-protocol comparison, not evidence of model instability under JianZhi's original protocol. CH3 and CH20 collapsed under the stricter CH30 prompt.
 3. The old 500/5,000 spike-count rules strongly determine outcomes. They can collapse divergent paths to the same endpoint (CH30) or erase every predicted unit (CH3). They should remain disabled in the current real-data main line unless independently calibrated.
 4. Unlimited total calls do not solve policy instability. CH31 consumed 58 calls because early SPLIT decisions expanded the state tree, while CH20 terminated after seven calls by discarding everything.
-5. Prompt detail alone is insufficient. Identical saved-state replay previously achieved only 7/10 action agreement, and these full rollouts show much larger closed-loop divergence.
+5. The separate CH30 byte-identical replay achieved 7/10 action agreement, showing nondeterminism for that CH30 artifact protocol. It does not validate the mistaken cross-channel comparison.
 
 ## Evaluation bug discovered and fixed
 

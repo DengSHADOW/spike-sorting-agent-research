@@ -1,4 +1,4 @@
-"""Run an isolated real-data rollout with the retained legacy detailed prompt.
+"""Run an isolated real-data rollout with JianZhi's checked-in legacy prompt.
 
 The purpose is reproduction, not the current recommended deployment policy.
 It deliberately enables the historical 500/5,000 spike-count filters, while
@@ -36,13 +36,13 @@ from src.io.matlab_loader import load_matlab_spikes
 from src.pipeline import pure as pure_module
 
 
-PROTOCOL_VERSION = "legacy-artifact-recovered-v2-current-safety"
+PROTOCOL_VERSION = "legacy-upstream-source-v1-current-safety"
 LEGACY_MAX_WAVEFORMS = 5000
 
-LEGACY_NEURONAL_CRITERIA = """
+UPSTREAM_NEURONAL_CRITERIA = """
 ## Valid Extracellular Action Potential Shape
 
-A neuronal waveform must exhibit a clean extracellular spike morphology.
+A neuronal waveform must exhibit a standard extracellular spike morphology.
 
 ### Shape Requirements (Neuronal Check)
 
@@ -60,26 +60,29 @@ A neuronal waveform must exhibit a clean extracellular spike morphology.
   - Should not include slow drifting, oscillations, or a second hump after the main trough.
 
 - **Baseline Stability:**
-  - Beginning and end of the waveform should remain close to baseline (near zero).
+  - Beginning and end of the waveform should be centered around baseline (near zero).
   - No large amplitude offsets or drift before or after the main spike.
 
-If any of these conditions are violated, the waveform is **not** considered neuronal.
-""".strip()
+However, natural waveform variability, vertical spread, or broadness from large cluster size\x20
+does NOT count as baseline drift, DC offset, instability, or violation.
+Only true morphology violations (monophasic noise, >3 phases, slow drift, or non-spike shape, etc.)\x20
+should be treated as non-neuronal.
+Do NOT hallucinate baseline shift or drift when the baseline is centered around zero.
+Discard huge clusters (>10000) with caution.
+"""
 
 
 def build_legacy_phase1_prompt(cluster_id: int, n_spikes: int, n_overclusters: int) -> str:
-    """Reconstruct the prompt retained in the 2025 legacy rollout artifacts."""
+    """Build the shared prompt checked into JianZhi's original source."""
     return f"""
 
 ## STEP 1: Neuronal Shape Check
 First check if the waveform shape is neuronal:
 
 Neuronal Shape Criteria:
+{UPSTREAM_NEURONAL_CRITERIA}
 
-{LEGACY_NEURONAL_CRITERIA}
-
-
-If waveforms do NOT have valid neuronal shape → DISCARD immediately.
+If waveforms do NOT have valid neuronal shape → DISCARD.
 
 ## STEP 2: Split Decision (only if neuronal)
 If waveforms ARE neuronal, check if cluster needs splitting:
@@ -101,11 +104,12 @@ Cluster Summary:
 - Spike count: {n_spikes}
 - Composed of {n_overclusters} overclusters (hierarchical subcomponents)
 
-Output JSON schema:
+Output only in JSON schema:
 {{
   "action": "KEEP" | "DISCARD" | "SPLIT",
   "rationale": "Brief explanation (2-3 sentences)",
 }}
+Do not add any other text.
 """
 
 
@@ -120,7 +124,7 @@ def build_legacy_phase2_prompt(
     correlation: float,
     merged_isi_rate: float,
 ) -> str:
-    """Reconstruct the merge prompt retained in the legacy artifacts."""
+    """Build the shared merge prompt checked into JianZhi's original source."""
     return f"""
 ## Decision Logic:
 
@@ -138,9 +142,7 @@ def build_legacy_phase2_prompt(
 - Only use actual "DISCARD" if small cluster itself is invalid (bad shape/too noisy)
 
 Neuronal Shape Criteria:
-
-{LEGACY_NEURONAL_CRITERIA}
-
+{UPSTREAM_NEURONAL_CRITERIA}
 
 You are deciding whether to MERGE small cluster {small_cluster_id} into large cluster {large_cluster_id}.
 
@@ -157,11 +159,12 @@ Merge Prediction:
 - Merged ISI violation rate: {merged_isi_rate:.2%}
 - Total spikes after merge: {n_small + n_large}
 
-Output JSON schema:
+Output only in JSON schema:
 {{
   "action": "MERGE" | "NOT_MERGE" | "DISCARD",
   "rationale": "Brief explanation (2-3 sentences)"
 }}
+Do not add any other text.
 """
 
 
@@ -616,12 +619,16 @@ def main() -> None:
             "rationale_requested": True,
         },
         "provenance": {
-            "prompt_source": "retained output/main_gpt-5.1 prompt artifacts",
+            "prompt_source": (
+                "upstream commit 03f68e5413648b41491656ae1ba772c9077bf7a5:"
+                "src/agent_context.py"
+            ),
             "visualization_source_commit": "03f68e5413648b41491656ae1ba772c9077bf7a5",
             "source_artifact_mismatch": (
-                "The initial commit contains result artifacts generated before the "
-                "prompt/logging code stored in that same commit; exact historical "
-                "source and NumPy RNG state are unavailable."
+                "CH3/CH20 and the call-suffixed CH31 artifacts match the shared "
+                "checked-in source prompt. CH30 and stale non-call-suffixed CH31 "
+                "artifacts contain a stricter earlier prompt revision. The exact "
+                "historical NumPy RNG state is unavailable."
             ),
         },
         "thresholds": {

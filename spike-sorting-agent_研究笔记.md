@@ -741,6 +741,8 @@ Qwen/Gemma 是仓库已有训练脚本支持的候选 baseline，并非 proposal
 
 ## 2026-09-22 — Legacy detailed-prompt 复现结论
 
+> 本节保留当时记录；其中“四通道同协议复现”的归因已被文末“Legacy prompt 归因更正”取代。
+
 - current fixed-state 的简化输入 prompt 不是本轮为 Gemma 临时修改的；它来自已有 `gemma4_train_reasoned` SFT 导出 profile。仓库没有“为 Gemma 简化可提高准确率”的设计记录或实验依据。
 - `action-only` 输出与简化输入规则分开处理：前者用于避免不可靠 rationale 和截断，理由成立；后者是否有益尚未做同状态、同图、同模型的 prompt-only A/B。
 - Git object `03f68e5` 中的 source 与同 commit 的结果 artifact 不匹配：代码 prompt 比保存 prompt 更新，logger 文件名策略也不同；旧波形图还使用未保存 RNG 的随机 5,000 条抽样。因此无法严格恢复当时 source/RNG，只能以保存的 prompt/PNG 为最强证据。
@@ -765,6 +767,28 @@ Qwen/Gemma 是仓库已有训练脚本支持的候选 baseline，并非 proposal
 - [ ] 只有 fixed-state 安全指标达标后，才做带 checkpoint、调用上限、错误 DISCARD quarantine 的 autonomous rollout。
 - [ ] prompt-only A/B 作为独立 ablation：冻结状态、图片 bytes、模型版本和输出协议，只替换 minimal 与 detailed/domain-policy 输入；不与 SFT 主实验混跑。
 - [ ] 模型与协议冻结后只使用一次 final-test；之后再决定 RAG/DPO/RL 或公开 benchmark。
+
+### 模拟数据线
+
+- 暂停；当前不继续投入运行或扩展。
+
+---
+
+## 2026-09-22 — Legacy prompt 归因更正
+
+- 复核 JianZhi 初始 commit `03f68e5` 后确认：源码 `src/agent_context.py` 只有一套供所有通道共用的谨慎版 Phase 1/2 prompt，并注明规则来自 CH3/20/30/31 人工 curation sheets。
+- CH3、CH20 和 CH31 的 call-suffixed prompt artifact 与该源码逐字节一致；CH30 artifact 以及 CH31 的无 call-suffix 残留文件属于更严格的另一 prompt revision。历史输出目录混有不同运行/版本残留，不代表有意为每个 CH 设计不同 prompt。
+- 此前四通道 fresh run 错把 CH30 strict artifact prompt 应用于 CH3/20/30/31。其 `95 calls / 239,670 tokens` 和结果继续保留作审计，但只能称为 cross-channel strict-prompt stress test，不能称为 JianZhi 原 prompt 的四通道复现，也不能据此断言 CH3/CH20 的历史结果不可复现。
+- CH30 专项结论仍成立：在 CH30 保存的 strict prompt+PNG 上 byte-identical replay 为 `7/10`；fresh rollout 终态 `1 unit / 50,821 spikes / F1=0.7162` 与历史一致但动作轨迹不同。
+- 隔离脚本 `scripts/run/run_legacy_prompt_rollout.py` 已替换为 JianZhi 源码原 prompt，并新增 CH3 Phase 1、CH20 Phase 2 artifact 的精确 SHA-256 回归测试；当前安全失败语义保留，不影响主线 runner。
+- Git 证据只支持“JianZhi 提交并维护、根据人工 action sheets 手写/整理的规则 prompt”；仓库没有自动 prompt optimization、agent 自我迭代或学习生成该 prompt 的记录。是否曾借助外部 AI 起草无法从仓库判断。
+
+### 最新待办：真实数据线（高 → 低）
+
+- [ ] 暂不再次调用 API；如要复现 legacy，先冻结并审核 JianZhi 原 prompt、图片 bytes/RNG、controller semantics 和每通道 artifact provenance，再由用户明确批准运行范围与预算。
+- [ ] 回到 leakage-free SFT 主线：训练 Qwen3.5-9B images-only 与 images+numeric action-only LoRA/SFT，并以 CH30 validation 对比 numeric RF。
+- [ ] 补齐或明确派生 KEEP/NOT_MERGE，保持 human/derived/teacher provenance。
+- [ ] fixed-state 安全指标达标后再进入带 checkpoint 和 DISCARD quarantine 的 autonomous rollout。
 
 ### 模拟数据线
 
