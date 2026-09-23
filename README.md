@@ -6,6 +6,15 @@ SpikeSorting studies whether VLM-based agents can assist or automate the expert 
 
 The long-term goal is to build a scalable research pipeline for simulated and real extracellular recordings, supporting controlled MEArec-based benchmarking, expert-like action trajectory construction, teacher-student interaction, few-shot adaptation, memory-augmented curation, and future RL / continual learning across heterogeneous lab settings.
 
+## Upstream reference
+
+This research repository is based on JianZhi Shen's original implementation:
+[jiseshen/spike-sorting-agent](https://github.com/jiseshen/spike-sorting-agent).
+Use that repository when checking original source code, prompt provenance, and
+historical experiment artifacts. This repository contains subsequent fixes,
+audits, real-data experiments, protocol changes, and documentation, so current
+behavior should not be assumed to match the upstream version exactly.
+
 ## Platform support
 
 This project is currently supported on Linux and macOS only. Windows users should use WSL2 instead.
