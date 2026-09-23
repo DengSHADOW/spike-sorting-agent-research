@@ -793,3 +793,27 @@ Qwen/Gemma 是仓库已有训练脚本支持的候选 baseline，并非 proposal
 ### 模拟数据线
 
 - 暂停；当前不继续投入运行或扩展。
+
+---
+
+## 2026-09-23 — 双-harness scope 记录
+
+- JianZhi 说明项目原始意图可能包含两套 harness，而不是要求所有路线共用一份 prompt。harness 是 prompt、观察、反馈/更新和评估的完整实验框架。
+- **Harness A：skill-rich zero-shot expert。** 给 base VLM 详细领域规则，测试不训练时能达到的 curation 水平；属于强 prompt-only baseline。
+- **Harness B：feedback-learning student。** student 从无 spike-curation 专项训练/记忆的预训练模型开始，只给基本任务定义，再利用 teacher feedback、trajectory、RAG/SFT 等逐步获得 skill。
+- 没有 human-in-the-loop 时，teacher model 用 oracle/人工参考动作和 reasoning 模拟领域专家反馈；human/GT 才是监督真值，teacher 主要是反馈生成器，不能未经验证充当新 ground truth。
+- 两套 harness 可以有不同 prompt；应在每套 harness 内分别冻结 prompt、输入顺序、输出 schema、controller 语义和评估协议。此前“冻结一个主 prompt”更正为“冻结每个 harness 的版本化协议”。
+- 当前代码具备 teacher-student trajectory、RAG memory、SFT 数据与训练脚本，但尚未完成真实数据上的逐轮 student adaptation；现阶段主要是离线 trajectory→SFT/RAG→重新评估，不是在线自进化。
+- 详细 domain prompt baseline 可归入 Harness A；真实 action-only SFT 主线可归入 Harness B。CH30 strict artifact 仍不能直接认定为 student harness，它更像详细 prompt 的另一历史 revision，具体映射尚未得到确认。
+
+### 最新待办：真实数据线（高 → 低）
+
+- [ ] 为 Harness A/B 分别写出并冻结协议清单；明确 prompt version/hash、输入、允许动作、输出 schema、更新机制和评估 split。
+- [ ] Harness A 只保留为明确标注的 zero-shot expert baseline，不继续混用不同历史 prompt artifact。
+- [ ] Harness B 使用 train recordings 完成 Qwen3.5-9B action-only images-only 与 images+numeric LoRA/SFT，并与 numeric RF 比较。
+- [ ] 明确 teacher feedback 的 human/GT provenance；只在 train split 使用 teacher/RAG，不向 validation/final-test 泄漏。
+- [ ] fixed-state 安全指标达标后再做 student autonomous rollout；模型与协议冻结后 final-test 只使用一次。
+
+### 模拟数据线
+
+- 暂停；保留其作为 Harness B teacher-feedback/continual-learning 的已有代码基础，当前不扩跑。
