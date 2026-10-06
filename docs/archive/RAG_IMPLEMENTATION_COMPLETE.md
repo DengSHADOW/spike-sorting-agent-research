@@ -1,8 +1,10 @@
-# RAG (Retrieval-Augmented Generation) Implementation — COMPLETE ✅
+# RAG 工程联通验证（历史 mock / smoke 记录）
+
+> 2026-10-06 归档：以下保留当时的实验条件、结果和判断，不是当前执行计划。旧文中的“下一步”“必须先 SFT”“未使用 final test”等不代表现状；四主通道已反复分析，fixed-state accuracy 不等于 rollout 终态质量。当前主线见 [方法与实验状态](../../项目方法与实验状态.md)。代码和 `output/` 路径均相对于仓库根目录。
 
 ## Overview
 
-The RAG (Retrieval-Augmented Generation) system has been **fully implemented and verified** in the spike-sorting pipeline. RAG enables the student VLM to retrieve similar past curation decisions as few-shot examples to improve its decision quality.
+The retained tests verify RAG storage, retrieval and prompt-injection plumbing, primarily through mock/smoke runs. They do not establish improved decision quality or a validated continual-learning method; that requires controlled evaluation.
 
 ---
 
@@ -184,11 +186,11 @@ Example 2: Cluster with similar ISI pattern
 
 ## Files Modified
 
-1. **[src/trajectories/record.py](src/trajectories/record.py)**
+1. **[src/trajectories/record.py](../../src/trajectories/record.py)**
    - Added RAG fields to `TrajectoryStep` dataclass
    - Added imports for `Any`, `Dict`
 
-2. **[src/trajectories/runner.py](src/trajectories/runner.py)**
+2. **[src/trajectories/runner.py](../../src/trajectories/runner.py)**
    - Phase 1: Record `rag_enabled`, `rag_hits`, `retrieved_examples` in step
    - Phase 2: Record RAG metadata for merge decisions
 

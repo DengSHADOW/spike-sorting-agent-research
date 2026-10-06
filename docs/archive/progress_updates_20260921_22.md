@@ -1,9 +1,17 @@
-# Spike-sorting post-curation agent：阶段进展与下一步讨论
+# 教授进展汇报归档（2026-09-21—22）
+
+> 2026-10-06 归档：以下保留当时的实验条件、结果和判断，不是当前执行计划。旧文中的“下一步”“必须先 SFT”“未使用 final test”等不代表现状；四主通道已反复分析，fixed-state accuracy 不等于 rollout 终态质量。当前主线见 [方法与实验状态](../../项目方法与实验状态.md)。代码和 `output/` 路径均相对于仓库根目录。
+
+<a id="chinese"></a>
+
+原文件：`教授进展汇报_20260921.md`
+
+## Spike-sorting post-curation agent：阶段进展与下一步讨论
 
 **汇报日期：2026-09-21**  
 **项目周期：2026-07 至今**
 
-## 1. 先说结论
+### 1. 先说结论
 
 前期工作已经搭建了一个能运行的多模态 post-curation agent：它读取初始 spike-sorting clusters，生成诊断图和质量指标，再决定是否 `SPLIT`、`DISCARD` 或 `MERGE`，并更新 cluster 状态。旧实验也证明了 GPT API 可以在真实 MAT 数据上完成闭环。
 
@@ -21,9 +29,9 @@
 
 ---
 
-## 2. 前期工作与当前工作的关系
+### 2. 前期工作与当前工作的关系
 
-### 前期：系统与可行性验证
+#### 前期：系统与可行性验证
 
 README 中记录的前期工作主要完成了：
 
@@ -36,7 +44,7 @@ README 中记录的前期工作主要完成了：
 
 这些工作证明了“真实 MAT → 诊断信息 → 模型决策 → cluster 更新 → 最终结果”能够运行。但旧实验的协议、数据版本和输入格式并未完全冻结，因此更适合作为 preliminary feasibility，而不是最终模型结论。
 
-### 当前：严格实验与本地 student 路线
+#### 当前：严格实验与本地 student 路线
 
 近期工作的重点是：
 
@@ -53,9 +61,9 @@ README 中记录的前期工作主要完成了：
 
 ---
 
-## 3. 当前实验设计
+### 3. 当前实验设计
 
-### 数据划分
+#### 数据划分
 
 | 数据部分 | Recording blocks | 动作数 | 用途 |
 |---|---|---:|---|
@@ -65,7 +73,7 @@ README 中记录的前期工作主要完成了：
 
 这里的 CH 是 recording 中的电极通道编号，例如 CH30 表示第 30 通道；它不是第 30 个实验，也不是一个独立数据版本。
 
-### 当前评测是什么
+#### 当前评测是什么
 
 当前 CH30 实验是 **fixed-state / teacher-forced action evaluation**：每一步都向模型提供人工轨迹中正确的动作前状态，让模型独立预测专家下一步动作。
 
@@ -73,9 +81,9 @@ README 中记录的前期工作主要完成了：
 
 ---
 
-## 4. 当前结果
+### 4. 当前结果
 
-### 4.1 未微调开源 VLM
+#### 4.1 未微调开源 VLM
 
 四个模型使用相同的 CH30 90 条样本、真实诊断图、数值指标和严格 JSON 输出协议：
 
@@ -88,7 +96,7 @@ README 中记录的前期工作主要完成了：
 
 四个模型都能稳定输出合法 JSON，但几乎无法复现专家的 `DISCARD`。因此失败主要不是格式或程序错误，而是未经领域训练的 base VLM 没有学会当前实验室的 curation 决策规则。
 
-### 4.2 Numeric-only supervised baseline
+#### 4.2 Numeric-only supervised baseline
 
 Random Forest 只使用四项数值特征：
 
@@ -111,15 +119,15 @@ CH30 上的 6 个错误全部是专家 `DISCARD` 被预测成 `SPLIT`；没有�
 
 ---
 
-## 5. 数值基线为什么会这么强？
+### 5. 数值基线为什么会这么强？
 
 目前有三种可能，而且可能同时存在。
 
-### 5.1 专家决策本来就高度依赖这些指标
+#### 5.1 专家决策本来就高度依赖这些指标
 
 cluster 大小、overcluster 数、ISI violation 和 amplitude variability 本来就是人工 curation 的重要依据。如果专家在多数常规案例上使用相对稳定的规则，简单模型就可能很好地复现这些动作。
 
-### 5.2 当前评测的任务范围比“完整 curation”窄
+#### 5.2 当前评测的任务范围比“完整 curation”窄
 
 当前数据主要记录了专家实际执行的编辑，而不是所有可能候选：
 
@@ -131,7 +139,7 @@ cluster 大小、overcluster 数、ISI violation 和 amplitude variability 本�
 
 因此，当前任务更接近“在已被选中需要编辑的候选里区分 SPLIT 和 DISCARD”，并不是“从所有 clusters 中完成完整、可停止的自主 curation”。这个较窄的任务确实可能比最初设想的完整 agent 问题简单。
 
-### 5.3 数据生成或候选选择可能形成 numeric shortcut
+#### 5.3 数据生成或候选选择可能形成 numeric shortcut
 
 `n_spikes` 和 `n_overclusters` 可能不仅描述神经信号，也间接暴露了候选是怎样进入 action log 的。如果人工流程或 hierarchy 构造本身使用了类似阈值，模型可能是在复现数据筛选规则，而不是理解波形形态。
 
@@ -139,15 +147,15 @@ Recording-block split 已经降低了同一 recording 泄漏，但 CH30 仍来�
 
 ---
 
-## 6. 这是否意味着项目没有意义？
+### 6. 这是否意味着项目没有意义？
 
 不意味着，但项目不能再预设“VLM 一定优于简单模型”。更诚实的目标应该是：**找出完成可靠 post-curation 所需的最小信息和最合适的 agent 结构。**
 
-### 如果图像在同等监督下带来提升
+#### 如果图像在同等监督下带来提升
 
 这将支持多模态 student 的核心假设：数值指标能处理普通案例，而 waveform、ISI、amplitude 和 hierarchy 图能帮助处理数值上相似但形态不同的困难案例。
 
-### 如果图像只在少数困难案例有用
+#### 如果图像只在少数困难案例有用
 
 最合理的系统不是“所有样本都交给大 VLM”，而是一个混合 agent：
 
@@ -158,7 +166,7 @@ Recording-block split 已经降低了同一 recording 泄漏，但 CH30 仍来�
 
 这种设计更快、更便宜，也更符合科学数据处理中对安全性的要求。
 
-### 如果图像始终没有增量价值
+#### 如果图像始终没有增量价值
 
 那也应当诚实接受结果：对于当前数据和动作定义，简单数值模型可能已经足够，强行使用 VLM 反而是过度设计。项目仍可以形成有价值的结论：
 
@@ -171,9 +179,9 @@ Recording-block split 已经降低了同一 recording 泄漏，但 CH30 仍来�
 
 ---
 
-## 7. 当前能声明与不能声明的内容
+### 7. 当前能声明与不能声明的内容
 
-### 可以声明
+#### 可以声明
 
 - 前期真实数据闭环证明了整体工程路径可行。
 - 当前已建立可复现、无明显 recording overlap 的真实动作评测协议。
@@ -181,7 +189,7 @@ Recording-block split 已经降低了同一 recording 泄漏，但 CH30 仍来�
 - 在当前 CH30 expert-edit task 上，数值指标与专家 `SPLIT/DISCARD` 高度相关。
 - 当前 numeric-only supervised baseline 显著强于 zero-shot base VLM。
 
-### 暂时不能声明
+#### 暂时不能声明
 
 - 不能说 Random Forest 已经完成 spike sorting 或完整 curation。
 - 不能说 93.3% 代表 autonomous agent 成功。
@@ -193,9 +201,9 @@ Recording-block split 已经降低了同一 recording 泄漏，但 CH30 仍来�
 
 ---
 
-## 8. 建议的下一步
+### 8. 建议的下一步
 
-### 第一优先级：做公平的模态消融
+#### 第一优先级：做公平的模态消融
 
 在完全相同的 train blocks、CH30 validation、训练预算和动作目标下比较：
 
@@ -205,7 +213,7 @@ Recording-block split 已经降低了同一 recording 泄漏，但 CH30 仍来�
 
 第一版可对 Qwen3.5-9B 做 action-only LoRA/SFT。这里 SFT 的目的不是追求漂亮数字，而是公平检验经过相同领域监督后，诊断图是否提供额外信息。
 
-### 第二优先级：补齐完整 agent 所需的负例
+#### 第二优先级：补齐完整 agent 所需的负例
 
 需要明确或构造具有 provenance 的：
 
@@ -215,7 +223,7 @@ Recording-block split 已经降低了同一 recording 泄漏，但 CH30 仍来�
 
 在这些数据补齐前，项目只能称为 expert edit imitation，不能称为完整 autonomous curation policy。
 
-### 第三优先级：安全 autonomous rollout
+#### 第三优先级：安全 autonomous rollout
 
 Fixed-state 指标达标后，再让模型从初始状态独立执行，并报告：
 
@@ -227,13 +235,13 @@ Fixed-state 指标达标后，再让模型从初始状态独立执行，并报�
 
 模型与协议冻结后，final-test block 只使用一次。
 
-### 暂时后置
+#### 暂时后置
 
 RAG、API-teacher、DPO、RL 和 continual learning 都可以成为后续扩展，但现在不会解决负例不足和模态价值未验证的问题，因此不应先做。
 
 ---
 
-## 9. 建议向教授讨论的关键问题
+### 9. 建议向教授讨论的关键问题
 
 1. 近期论文问题是否聚焦为：诊断图在强 numeric baseline 之外是否提供增量价值？
 2. 是否可以请数据提供者确认或补标少量 `KEEP/NOT_MERGE`，尤其是模型最不确定的案例？
@@ -243,7 +251,7 @@ RAG、API-teacher、DPO、RL 和 continual learning 都可以成为后续扩展�
 
 ---
 
-## 10. 可直接使用的简短汇报
+### 10. 可直接使用的简短汇报
 
 > The previous work established a working multimodal post-curation pipeline and showed that API-based VLMs could operate on real spike-sorting data. My recent work focused on making the study reproducible and trainable: I audited the real datasets, reconstructed 1,374 expert edits, introduced recording-block splits, fixed the action protocol, and benchmarked open VLMs under the same conditions.
 >
@@ -251,9 +259,42 @@ RAG、API-teacher、DPO、RL 和 continual learning 都可以成为后续扩展�
 >
 > The result changes the main research question. Rather than assuming that a VLM is necessary, I now want to test whether diagnostic images provide incremental value beyond a strong numeric baseline under equal supervision. The next experiment is a controlled numeric-only, image-only, and combined LoRA/SFT comparison. Depending on the result, the final system may be a hybrid agent that handles routine cases numerically, uses a VLM for ambiguous morphology, and abstains or requests review for unsafe decisions.
 
-## 11. 相关记录
+### 11. 相关记录
 
-- [README.md](README.md)：前期系统、模拟流程、RAG 和旧真实闭环概览。
-- [CH30_NUMERIC_BASELINE_20260921.md](CH30_NUMERIC_BASELINE_20260921.md)：numeric-only 实验协议和完整结果。
-- [CH30_OPEN_VLM_COMPARISON_20260921.md](CH30_OPEN_VLM_COMPARISON_20260921.md)：四个 open VLM 的同协议比较。
-- [项目方法与实验状态.md](项目方法与实验状态.md)：当前方法、数据问题、评测边界和论文路线。
+- [README.md](../../README.md)：前期系统、模拟流程、RAG 和旧真实闭环概览。
+- [CH30_NUMERIC_BASELINE_20260921.md](fixed_state_experiments_20260921_22.md#numeric)：numeric-only 实验协议和完整结果。
+- [CH30_OPEN_VLM_COMPARISON_20260921.md](fixed_state_experiments_20260921_22.md#open-vlm)：四个 open VLM 的同协议比较。
+- [项目方法与实验状态.md](../../项目方法与实验状态.md)：当前方法、数据问题、评测边界和论文路线。
+
+---
+
+<a id="english"></a>
+
+原文件：`PROFESSOR_PROGRESS_UPDATE_20260922.md`
+
+## Spike-Sorting Agent: Data and Experimental Update
+
+**September 22, 2026**
+
+Since reproducing the pipeline, I have audited the real data and established leakage-aware baselines.
+
+**Data:** 17 current-format MAT files; 4,469,063 spikes; 16 supervised datasets; one unlabeled CH5 excluded; 1,374 expert actions; and 5,327 diagnostic images. Four Tianmin MAT files are exact Jacob duplicates and are not counted independently.
+
+**Recording-block split:** 973 training actions (457 SPLIT, 374 DISCARD, 142 MERGE); 90 CH30 validation actions (43 SPLIT, 41 DISCARD, 6 MERGE); and 311 untouched final-test actions. The logs contain executed edits but no reliable KEEP or NOT_MERGE labels, so current evaluation measures expert-edit imitation rather than a complete stopping/merge-rejection policy.
+
+**Protocol:** CH30 uses fixed expert pre-action states; predictions are scored but not executed. Split states use four diagnostic images, merge states use three pairwise images, and both include numerical metrics. All models see the same 90 samples and use strict action-only JSON. Open models ran with vLLM 0.29 on one H100 80 GB; GPT models used the official OpenAI API. No mock, RAG, MAT modification, or state update was used. Every formal run produced valid JSON for 90/90 samples.
+
+**Action-level results (accuracy / macro-F1 / DISCARD recall):**
+
+- Qwen3.5-2B: 0.067 / 0.333 / 0.
+- Qwen3.5-4B: 0.378 / 0.530 / 0.024.
+- Qwen3.5-9B: 0.500 / 0.570 / 0.
+- Gemma-4-E4B-it: 0.544 / 0.578 / 0.
+- GPT-4.1: 0.389 / 0.575 / 0; SPLIT recall 0.674.
+- GPT-5.1: 0.367 / 0.564 / 0; SPLIT recall 0.628.
+
+GPT-4.1 and GPT-5.1 agreed on 88/90 predictions. Their actual API versions were `gpt-4.1-2025-04-14` and `gpt-5.1-2025-11-13`. GPT-4.1 used 221,485 input and 530 output tokens; GPT-5.1 used 184,225 input and 18,438 output tokens, including 16,652 reasoning tokens.
+
+**Numeric-only baseline:** Random Forest used log spike count, log overcluster count, ISI violation rate, and amplitude CV. Train-only grouped-CV accuracy/macro-F1 was 0.904/0.903. On CH30 SPLIT/DISCARD, it achieved 78/84 = 0.929. DISCARD P/R/F1 was 1.000/0.854/0.921; SPLIT was 0.878/1.000/0.935. All six errors were DISCARD→SPLIT. The reported 84/90 overall includes six positive-only MERGE cases handled by a constant rule; merge generalization remains untested.
+
+The numeric model is supervised while all VLMs are zero-shot, so images have not yet been tested fairly. Next I will train matched Qwen3.5-9B images-only and images-plus-numeric LoRA/SFT models, add KEEP/NOT_MERGE supervision, run a safe rollout with ABSTAIN and reversible DISCARD, then evaluate the frozen model once on the 311-action final test.

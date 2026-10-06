@@ -1,0 +1,81 @@
+{
+  "version": "curation-v1-preparation",
+  "status": "offline-only-skill-candidate",
+  "api_calls_authorized": false,
+  "model": {
+    "name": "gpt-6-astra",
+    "reasoning_effort": "high",
+    "max_output_tokens": 4000,
+    "endpoint": "responses"
+  },
+  "messages": {
+    "contract": "instructions",
+    "skill_and_observation": "user",
+    "output": "action-and-brief-rationale",
+    "rag": false
+  },
+  "controller": {
+    "base": "src/pipeline/pure.py",
+    "auto_discard_threshold": 0,
+    "small_cluster_threshold": 4000,
+    "final_minimum_threshold": 0,
+    "all_not_merge": "preserve",
+    "split": "last_hierarchical_merge",
+    "channel_specific_guards": false,
+    "provider_error": "stop",
+    "parse_failure": "preserve-and-record-ABSTAIN",
+    "active_model_abstain": false
+  },
+  "observations": {
+    "phase1": [
+      "waveform",
+      "isi",
+      "amplitude",
+      "tree"
+    ],
+    "phase2": [
+      "small_waveform",
+      "large_waveform",
+      "merged_isi"
+    ],
+    "replay_legacy_phase1": [
+      "waveform",
+      "isi",
+      "tree"
+    ],
+    "regenerate_images": false
+  },
+  "scope": {
+    "development_blocks": [
+      "cM2-e004_004-006",
+      "cM2-e004_011-015",
+      "cM2-e008_021-028"
+    ],
+    "reserved_after_prior_exposure": [
+      "cM2-e007_012-017"
+    ],
+    "quarantined_blocks": [
+      "cM2-e004_001-003"
+    ],
+    "clean_held_out_blocks": [],
+    "grouping": "provisional_filename_inference",
+    "prior_exposure": "All five blocks appeared in historical RF training/evaluation or repeated VLM analysis. Reserved is prospective only, not pristine; legacy RF is not an unseen-data comparator there.",
+    "cl_initialization": "expert-skill-copy; future minimal-skill arm separate"
+  },
+  "evaluation": {
+    "action_targets": "recorded expert edits only at matching pre-action state",
+    "rollout_targets": "same MAT curation.assigns",
+    "derived_cases": "terminal composition constraints, not unique next-action labels",
+    "match": "existing many-to-one spike pooled P/R/F1, disclose limitations",
+    "incomplete": "no terminal score",
+    "abstain": "keep in denominator and retain resulting terminal state",
+    "case_selection": "targeted development diagnostic, not accuracy benchmark"
+  },
+  "pending_gates": [
+    "No live v1 runner yet; integrate audited request builder without changing historical runners.",
+    "Verify phase2 individual ISI calculation: current runner appends first spike again; fix separately before rollout.",
+    "Verify structured schema/provider compatibility and response handling before paid use.",
+    "Review display sampling and phase2 axis comparability separately; no plotting changes in this step.",
+    "Specify paid budget, stop conditions and independent/previously-exposed evaluation claims before any API run."
+  ]
+}

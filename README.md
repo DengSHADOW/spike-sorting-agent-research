@@ -6,6 +6,39 @@ SpikeSorting studies whether VLM-based agents can assist or automate the expert 
 
 The long-term goal is to build a scalable research pipeline for simulated and real extracellular recordings, supporting controlled MEArec-based benchmarking, expert-like action trajectory construction, teacher-student interaction, few-shot adaptation, memory-augmented curation, and future RL / continual learning across heterogeneous lab settings.
 
+## Current priority — 2026-10-06
+
+Establish a **closed-model, frozen-domain-skill autonomous curation baseline**.
+Calibrate the domain instructions on development data first, then freeze the
+skill, task contract, model settings, observations, controller and evaluator
+before the full evaluation. SFT and open-model continual learning are later
+work, not prerequisites. Renaming a prompt block to a skill does not improve
+predictions by itself; changing its actual instructions may, and requires
+controlled validation. An offline system/skill request builder, a candidate
+skill v1 and development diagnostics are now implemented; the live runner is
+unchanged, and no new model evaluation or paid run has been performed.
+
+The completed legacy Astra/high runs scored F1 **0.3339 on CH30** and **0 on
+CH31**; CH3 stopped after 84 accepted decisions and CH20 did not start. These
+are retained old-protocol results, not a complete four-channel baseline or
+evidence that the source MAT files are invalid. CH3/20 used a protected
+controller, unlike CH30/31. Repeatedly inspected channels must not be presented
+as untouched final-test data. See Section 15 of
+[`项目方法与实验状态.md`](项目方法与实验状态.md) for the current protocol boundaries;
+dated historical plans below do not override this priority.
+
+## Documentation
+
+- [Method, current protocol and consolidated results](项目方法与实验状态.md): authoritative current scope; Section 6.0 indexes prior experiments.
+- [Implementation plan and offline skill v1](项目流程与实施计划_20261006.md): decisions, rule changes and remaining live-integration gates.
+- [Dated research notes](spike-sorting-agent_研究笔记.md): history is preserved; only the bottom TODO list is current.
+- [Failure analysis](实验失败案例分析与归档.md): evidence and limits of causal claims.
+- [Script entry points](scripts/README.md): current real-data tools versus historical runners.
+
+Detailed dated reports are in `docs/archive/`; four fixed-state reports and two
+progress updates have been consolidated there. Archived recommendations are
+not current instructions. Resume material remains separate from research records.
+
 ## Upstream reference
 
 This research repository is based on JianZhi Shen's original implementation:
@@ -26,18 +59,26 @@ The main reason is that the `neuron` package does not provide a Windows wheel, s
 
 ![SpikeSorting pipeline overview](figures/spikesorting_pipeline.png)
 
-The full curation pipeline proceeds in three main phases:
+The implemented `PureVLMCurationPipeline` uses these phases:
 
-**Phase 0: Neuronal filtering.**  
-A Neuronal Agent scans all initial clusters once and removes clusters that fail extracellular spike-shape criteria.
+| Phase | Operation | Current local safe route |
+|---|---|---|
+| 0 | Automatic spike-count filtering | Disabled when threshold = 0 |
+| 1 | VLM chooses KEEP / SPLIT / DISCARD; SPLIT follows the existing hierarchy | Re-render and judge resulting clusters |
+| 2 | Validate merge targets and evaluate candidate pairs | NOT_MERGE alone does not justify deleting a cluster |
+| 3 | Automatic final spike-count filtering | Disabled when threshold = 0 |
 
-**Phase 1: Recursive split refinement.**  
-A DFS-style traversal applies a Split Agent to large neuronal clusters. Clusters with high internal variability are recursively partitioned until they satisfy quality and consistency criteria.
+The real-data safe runner disables Phase 0/3 by default; the pipeline class
+and frozen historical runners retain other defaults. Always report the actual
+entry point and thresholds. Historical 500/4,000/5,000 rules and deletion guards
+are different controller conditions, not simply different prompts.
 
-**Phase 2: Merge and discard.**  
-Small clusters are compared against large clusters by a Merge Agent. Matched clusters are merged into their corresponding neuronal units, while unmatched or non-neuronal clusters are discarded.
-
-This design turns spike sorting post-curation into a long-horizon multimodal decision process: the agent observes waveform plots and diagnostic metrics, proposes an action, receives feedback, updates the cluster state, and continues until the recording is curated.
+Existing live prompts mix task instructions, domain criteria, observation
+metadata and output requirements; the main API adapter sends them as user
+messages. The independent offline builder `src/agent/curation_contract.py` now
+separates a fixed contract (`configs/curation/system_v1.txt`), versioned domain
+skills and observations. **Live integration and model validation remain pending.**
+Prompt/skill changes do not replace the Python action executor.
 
 ---
 
@@ -70,7 +111,7 @@ the artifacts currently retained in `output/`; they are intended to make the
 state of the research reproducible and to distinguish pipeline verification
 from model-quality claims.
 
-### Simulated Stage 1-6 run
+### Simulated Stage 1-6 run — historical, paused
 
 The completed end-to-end run uses `setting_001`: 20 simulated 120-second
 recordings, low noise (10 uV RMS), no drift, no overlap, a Neuronexus-32 probe,
@@ -91,7 +132,7 @@ student baseline: the current alignment summary comes from mock predictions,
 the reasoning score is a mock-path value, and the adaptation dataset is too
 small and class-imbalanced for a meaningful SFT conclusion.
 
-### RAG verification
+### RAG integration verification — not a performance claim
 
 Continual retrieval-augmented generation is integrated into both Phase 1
 cluster decisions and Phase 2 merge decisions. The memory combines median
@@ -110,7 +151,7 @@ The retained standalone RAG verification produced:
 This confirms the RAG storage, retrieval, prompt injection, persistence, and
 trajectory-observability path. A controlled same-model `no_rag` versus `rag`
 evaluation is still required before claiming an accuracy improvement. See
-[`RAG_IMPLEMENTATION_COMPLETE.md`](RAG_IMPLEMENTATION_COMPLETE.md) for the
+[`docs/archive/RAG_IMPLEMENTATION_COMPLETE.md`](docs/archive/RAG_IMPLEMENTATION_COMPLETE.md) for the
 implementation record and verification command.
 
 The later corrected Stage 3-5 mock rebuild contains 82 trajectory and memory
@@ -136,14 +177,17 @@ outputs are local assets and are not included in Git.
 | Separate action/terminal datasets | 14 | Valid for separate action-level and cluster-level evaluation, not a unified trajectory claim |
 | Duplicate MAT files | 4 | Tianmin copies are SHA-256-identical to corresponding Jacob files and are counted once |
 
-The default leakage-aware split keeps every channel from an inferred recording
-block in one fold:
+The original recording-block split kept channels from each inferred recording
+block together. This is a historical design, not an untouched-test claim:
 
 | Split | Inferred recording blocks | Actions | Current use |
 |---|---|---:|---|
 | Train | `cM2-e004_001-003`, `cM2-e004_011-015`, `cM2-e007_012-017` | 973 | Action-only SFT and train-only model selection |
 | Validation | `cM2-e008_021-028` | 90 | CH30 base/SFT comparison and model selection |
-| Final test | `cM2-e004_004-006` | 311 | Reserved for one evaluation after model and protocol freeze |
+| Originally designated final test | `cM2-e004_004-006` | 311 | Subsequently inspected repeatedly; not an untouched final test |
+
+CH3/20/30/31 have been repeatedly inspected. Skill tuning on them is development
+work; audit exposure of other recordings before assigning a new held-out role.
 
 Recording/session identity is inferred from directory names and has not yet
 been confirmed by the provider. This split is safer than random channel/sample
@@ -221,6 +265,55 @@ requires supervised numeric-only, images-only, and combined models trained on
 the same blocks. The six `MERGE` labels are positive-only; no current result
 demonstrates rejection of an incorrect merge.
 
+### GPT-5.1 cautious-source full rollout (2026-09-23)
+
+All four channels were rerun from their initial assignments with JianZhi's
+shared cautious source prompt, exact model snapshot `gpt-5.1-2025-11-13`,
+reasoning effort `medium`, and no total call cap. This is the skill-rich
+zero-shot expert harness; actions were executed and changed later states.
+
+| Channel | API calls | Final units | Precision | Recall | F1 | Exact historical assignment |
+|---|---:|---:|---:|---:|---:|---:|
+| CH3 | 14 | 0 | 0.0000 | 0.0000 | 0.0000 | No |
+| CH20 | 3 | 0 | 0.0000 | 0.0000 | 0.0000 | No |
+| CH30 | 27 | 1 | 0.9878 | 0.5578 | 0.7130 | No |
+| CH31 | 24 | 2 | 0.6797 | 0.7728 | 0.7233 | No |
+| **Mean** | **68 total** | — | **0.4169** | **0.3327** | **0.3591** | **0/4** |
+
+The run used 174,606 tokens, with an estimated API cost of $0.4861 at the
+documented GPT-5.1 token rates. CH3 and CH20 ended empty; CH30 and CH31 reached
+scores close to the retained historical endpoints but not identical spike
+assignments. The old visualization path uses an unseeded random 5,000-waveform
+sample, and a closed-loop action divergence changes all later states. This
+single run therefore demonstrates protocol instability, not a stable estimate
+of GPT-5.1 capability. See
+[`docs/archive/GPT51_CAUTIOUS_FULL_ROLLOUT_20260923.md`](docs/archive/GPT51_CAUTIOUS_FULL_ROLLOUT_20260923.md).
+
+### GPT-5.1 deletion-protected full rollout (2026-09-23)
+
+The same four channels were then rerun with the cautious prompt unchanged but
+with destructive controller behavior made recoverable: automatic `<500` and
+`<5,000` filters were disabled, Phase-1 `DISCARD` on clusters with at least
+4,000 spikes became `SPLIT`/`ABSTAIN`, and Phase-2 `DISCARD` became
+`ABSTAIN`. This tests a safety intervention, not a new prompt or trained model.
+
+| Channel | API calls | Final units | Assigned spikes | Precision | Recall | F1 |
+|---|---:|---:|---:|---:|---:|---:|
+| CH3 | 258 | 55 | 82,700 | 0.2221 | 1.0000 | 0.3634 |
+| CH20 | 207 | 38 | 70,354 | 0.2625 | 1.0000 | 0.4158 |
+| CH30 | 869 | 50 | 376,317 | 0.2116 | 0.8742 | 0.3408 |
+| CH31 | 213 | 31 | 120,026 | 0.4194 | 1.0000 | 0.5909 |
+| **Mean / total** | **1,547 total** | — | **649,397** | **0.2789** | **0.9686** | **0.4277** |
+
+The run used 3,780,384 tokens and an estimated $11.85 under the documented
+rate assumptions. It prevented the CH3/CH20 empty-output failure, but excessive
+preservation caused 482,591 pooled false-positive spikes and low precision.
+The model also gave contradictory validity judgments for the same small
+cluster when only the candidate merge target changed. Deletion protection is
+therefore retained as a safety fail-safe, not accepted as a performance
+solution. Detailed protocol and analysis are in
+[`docs/archive/GPT51_DELETE_PROTECTED_FULL_ROLLOUT_20260923.md`](docs/archive/GPT51_DELETE_PROTECTED_FULL_ROLLOUT_20260923.md).
+
 ### Invalid cross-channel strict-prompt run (retained for audit)
 
 GPT-5.1 was rerun from each channel's initial assignments with a strict prompt
@@ -246,7 +339,7 @@ shared source prompt. CH30 remains a valid reproduction attempt for its own
 retained strict-prompt artifacts: it reached the same endpoint through a
 different trajectory. Neither historical nor fresh legacy numbers are a SOTA
 claim or the current project baseline. Full details and the correction are in
-[`LEGACY_FULL_ROLLOUT_ALL_CHANNELS_20260922.md`](LEGACY_FULL_ROLLOUT_ALL_CHANNELS_20260922.md).
+[`docs/archive/LEGACY_FULL_ROLLOUT_ALL_CHANNELS_20260922.md`](docs/archive/LEGACY_FULL_ROLLOUT_ALL_CHANNELS_20260922.md).
 
 The human reference is a target derived from the provided curation data, not
 an independent blind human benchmark. The large source MAT directories and API
@@ -269,13 +362,17 @@ ISI/amplitude metrics. Formal fixed-state evaluation now uses the versioned
 and a strict response schema. Legacy reasoned output remains available only as
 an explicit compatibility mode. The leakage-aware split uses three recording
 blocks for training, `cM2-e008_021-028`/CH30 for validation, and
-`cM2-e004_004-006` as an unused final-test block. The next main experiment is
-an action-only Qwen3.5-9B LoRA/SFT comparison of images-only versus
-images-plus-numeric inputs under this frozen split; autonomous execution is
-deferred until fixed-state DISCARD and negative-merge safety are adequate.
+`cM2-e004_004-006` originally designated as the final-test block. Subsequent
+CH3/20/31 experiments and failure analysis mean that this block can no longer
+be described as untouched. The previously planned action-only Qwen3.5-9B
+LoRA/SFT comparison remains future student work; the immediate priority is
+the closed-model frozen-skill baseline described above. The student path's
+four-view/action-only contract is distinct from the legacy closed-model
+three-view/action-plus-rationale protocol; changing that contract requires
+an explicitly versioned experiment.
 
 The complete 2026-09-14 run record, data limitations, and open-model roadmap are
-documented in [`REAL_DATA_OPEN_VLM_STATUS_20260914.md`](REAL_DATA_OPEN_VLM_STATUS_20260914.md).
+documented in [`docs/archive/REAL_DATA_OPEN_VLM_STATUS_20260914.md`](docs/archive/REAL_DATA_OPEN_VLM_STATUS_20260914.md).
 The current method definition, evaluation terminology, legacy/current result
 boundary, and paper-oriented experiment plan are consolidated in
 [`项目方法与实验状态.md`](项目方法与实验状态.md).
