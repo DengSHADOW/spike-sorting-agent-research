@@ -1,5 +1,7 @@
 # Legacy GPT-5.1 prompt/rollout reproduction — 2026-09-22
 
+> 2026-10-06 归档：以下保留当时的实验条件、结果和判断，不是当前执行计划。旧文中的“下一步”“必须先 SFT”“未使用 final test”等不代表现状；四主通道已反复分析，fixed-state accuracy 不等于 rollout 终态质量。当前主线见 [方法与实验状态](../../项目方法与实验状态.md)。代码和 `output/` 路径均相对于仓库根目录。
+
 > **Scope correction:** this report is specifically a reproduction of the
 > strict prompt retained in CH30 output artifacts. It must not be treated as the
 > common prompt used for CH3/CH20/CH31 or as a four-channel protocol.

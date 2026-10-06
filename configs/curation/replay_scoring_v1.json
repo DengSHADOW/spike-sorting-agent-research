@@ -1,0 +1,74 @@
+{
+  "version": "skill-replay-scoring-v1",
+  "scope": "35 targeted, dependent development cases; diagnostic only, not a general accuracy benchmark. Historical three-view and local expert-state strata are reported separately.",
+  "expert": {
+    "target_type": "recorded_expert_edit",
+    "correct": "exact action equality with expert_action",
+    "separate_by_phase": true,
+    "recall_actions": [
+      "DISCARD",
+      "SPLIT",
+      "MERGE"
+    ]
+  },
+  "constraints": {
+    "discard_loses_expert_spikes_next_action_not_unique": {
+      "observed_cases": 7,
+      "harmful_actions": [
+        "DISCARD"
+      ],
+      "preferred_actions": [
+        "KEEP"
+      ],
+      "tolerable_not_ideal_actions": [
+        "SPLIT"
+      ],
+      "acceptable_actions": [],
+      "reason": "Discard immediately removes expert-positive members. For these audited single-unit fragments KEEP is preferred; SPLIT is tolerable but not ideal, not a unique expert-action label."
+    },
+    "all_members_terminal_noise_next_action_not_unique": {
+      "observed_cases": 8,
+      "harmful_actions": [
+        "KEEP"
+      ],
+      "preferred_actions": [
+        "DISCARD"
+      ],
+      "tolerable_not_ideal_actions": [
+        "SPLIT"
+      ],
+      "acceptable_actions": [],
+      "reason": "KEEP retains terminal-noise members at this step and is scored as retention risk with count filters off; SPLIT delays rejection. This proxy does not assert that later rollout phases cannot discard them."
+    },
+    "mixed_terminal_membership_next_action_not_unique": {
+      "observed_cases": 4,
+      "harmful_actions": [
+        "DISCARD",
+        "KEEP"
+      ],
+      "preferred_actions": [],
+      "tolerable_not_ideal_actions": [],
+      "acceptable_actions": [
+        "SPLIT"
+      ],
+      "reason": "DISCARD loses expert spikes; KEEP retains known noise in the mixed state. SPLIT is the acceptable diagnostic action, without guaranteeing hierarchy separability or final rollout improvement."
+    }
+  },
+  "acceptance": {
+    "require_complete_paired_run": true,
+    "harmful_rate": "v1 < v0 over all derived case-repeat observations",
+    "expert_correct_count": "v1 >= v0 - 1 over all recorded expert case-repeat observations (one total error allowance, not one per repeat)",
+    "list_expert_regressions_for_manual_review": true,
+    "automatic_result": "candidate_eligible_for_review, not final acceptance; human review of regressions remains required",
+    "repeats": "Pair by case_id and repeat index. Repeats are not independent samples. No majority-vote replacement in primary counts.",
+    "incomplete": "Report coverage and observed-only diagnostics; no acceptance decision or missing-action imputation."
+  },
+  "consistency": {
+    "pairwise": "equal-action repeat pairs / all observed repeat pairs",
+    "unanimity": "cases with all planned repeats present and identical / cases with all planned repeats present",
+    "repeats_one": null
+  },
+  "strata": "target_type + phase + image_layout + actual image count; phase2 local expert cases have three images, not four",
+  "changes": "Any byte change invalidates existing runs; create a new run and repeat evaluation. Scorer must reject a scoring SHA256 mismatch.",
+  "created": "2026-10-06"
+}

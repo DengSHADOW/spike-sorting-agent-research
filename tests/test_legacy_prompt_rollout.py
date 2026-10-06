@@ -91,3 +91,51 @@ def test_unlimited_cli_value_disables_budget() -> None:
     assert MODULE._optional_positive_int("unlimited") is None
     assert MODULE._optional_positive_int("none") is None
     assert MODULE._optional_positive_int("25") == 25
+
+
+def test_large_discard_is_changed_to_split_when_hierarchy_can_split() -> None:
+    decision = {"action": "DISCARD", "rationale": "broad aggregate waveform"}
+    protected = MODULE.apply_phase1_discard_protection(
+        decision,
+        n_spikes=82_520,
+        n_overclusters=183,
+        minimum_spikes=10_000,
+    )
+    assert protected["action"] == "SPLIT"
+    assert protected["original_action"] == "DISCARD"
+    assert protected["decision_status"] == "discard_protected"
+
+
+def test_large_unsplittable_discard_is_changed_to_abstain() -> None:
+    decision = {"action": "DISCARD", "rationale": "uncertain"}
+    protected = MODULE.apply_phase1_discard_protection(
+        decision,
+        n_spikes=12_000,
+        n_overclusters=1,
+        minimum_spikes=10_000,
+    )
+    assert protected["action"] == "ABSTAIN"
+
+
+def test_small_discard_is_not_changed() -> None:
+    decision = {"action": "DISCARD", "rationale": "artifact"}
+    protected = MODULE.apply_phase1_discard_protection(
+        decision,
+        n_spikes=999,
+        n_overclusters=5,
+        minimum_spikes=10_000,
+    )
+    assert protected is decision
+
+
+def test_phase2_discard_is_changed_to_abstain_when_enabled() -> None:
+    decision = {"action": "DISCARD", "rationale": "small cluster looks noisy"}
+    protected = MODULE.apply_phase2_discard_protection(decision, enabled=True)
+    assert protected["action"] == "ABSTAIN"
+    assert protected["original_action"] == "DISCARD"
+    assert protected["decision_status"] == "discard_protected"
+
+
+def test_phase2_discard_protection_can_be_disabled() -> None:
+    decision = {"action": "DISCARD", "rationale": "artifact"}
+    assert MODULE.apply_phase2_discard_protection(decision, enabled=False) is decision

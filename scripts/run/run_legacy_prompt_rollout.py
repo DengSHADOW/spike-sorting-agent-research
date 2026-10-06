@@ -1,9 +1,9 @@
 """Run an isolated real-data rollout with JianZhi's checked-in legacy prompt.
 
-The purpose is reproduction, not the current recommended deployment policy.
-It deliberately enables the historical 500/5,000 spike-count filters, while
-retaining current safety fixes for provider/parse failures and NOT_MERGE.  It
-never overwrites the retained ``output/main_gpt-*`` results.
+Historical size filters remain the defaults for reproduction, but CLI flags
+can disable them and protect large Phase-1 discards for safe real-data runs.
+Provider/parse and NOT_MERGE safety fixes always remain enabled. The script
+never overwrites retained ``output/main_gpt-*`` results.
 """
 
 from __future__ import annotations
@@ -336,9 +336,59 @@ def _call_and_parse(
     raise AssertionError("unreachable")
 
 
+def apply_phase1_discard_protection(
+    decision: dict[str, Any],
+    *,
+    n_spikes: int,
+    n_overclusters: int,
+    minimum_spikes: int,
+) -> dict[str, Any]:
+    """Prevent a single VLM call from deleting a large real-data cluster."""
+    if (
+        decision.get("action") != "DISCARD"
+        or minimum_spikes <= 0
+        or n_spikes < minimum_spikes
+    ):
+        return decision
+    original_rationale = str(decision.get("rationale", ""))
+    effective_action = "SPLIT" if n_overclusters > 1 else "ABSTAIN"
+    return {
+        **decision,
+        "action": effective_action,
+        "original_action": "DISCARD",
+        "rationale": (
+            "DISCARD protected for a large real-data cluster "
+            f"({n_spikes} >= {minimum_spikes} spikes); "
+            f"effective action={effective_action}. Original VLM rationale: "
+            f"{original_rationale}"
+        ),
+        "decision_status": "discard_protected",
+    }
+
+
+def apply_phase2_discard_protection(
+    decision: dict[str, Any], *, enabled: bool
+) -> dict[str, Any]:
+    """Preserve a small cluster when Phase 2 proposes destructive deletion."""
+    if not enabled or decision.get("action") != "DISCARD":
+        return decision
+    original_rationale = str(decision.get("rationale", ""))
+    return {
+        **decision,
+        "action": "ABSTAIN",
+        "original_action": "DISCARD",
+        "rationale": (
+            "Phase-2 DISCARD protected; effective action=ABSTAIN and the "
+            f"small cluster is preserved. Original VLM rationale: {original_rationale}"
+        ),
+        "decision_status": "discard_protected",
+    }
+
+
 def legacy_phase1_decision(
     *,
     recorder: DecisionRecorder,
+    protect_large_discard_min_spikes: int = 0,
     cluster_id: int,
     waveforms: np.ndarray,
     spike_times: np.ndarray,
@@ -378,7 +428,7 @@ def legacy_phase1_decision(
         image_names=["waveform", "isi", "tree"],
         extra_meta={"protocol": PROTOCOL_VERSION},
     )
-    return _call_and_parse(
+    decision = _call_and_parse(
         recorder=recorder,
         stage="phase1",
         entity={"cluster_id": cluster_id},
@@ -392,11 +442,32 @@ def legacy_phase1_decision(
         reasoning_effort=reasoning_effort,
         image_paths=[] if saved is None else saved.get("image_files", []),
     )
+    protected = apply_phase1_discard_protection(
+        decision,
+        n_spikes=len(spike_times),
+        n_overclusters=len(overcluster_composition),
+        minimum_spikes=protect_large_discard_min_spikes,
+    )
+    if protected is not decision:
+        recorder.append(
+            {
+                "stage": "phase1_discard_guard",
+                "cluster_id": cluster_id,
+                "original_action": "DISCARD",
+                "effective_action": protected["action"],
+                "n_spikes": len(spike_times),
+                "n_overclusters": len(overcluster_composition),
+                "protect_large_discard_min_spikes": protect_large_discard_min_spikes,
+                "original_rationale": decision["rationale"],
+            }
+        )
+    return protected
 
 
 def legacy_phase2_decision(
     *,
     recorder: DecisionRecorder,
+    protect_phase2_discards: bool = False,
     small_cluster_id: int,
     small_waveforms: np.ndarray,
     small_spike_times: np.ndarray,
@@ -459,7 +530,7 @@ def legacy_phase2_decision(
         image_names=["small_waveform", "large_waveform", "merged_isi"],
         extra_meta={"protocol": PROTOCOL_VERSION},
     )
-    return _call_and_parse(
+    decision = _call_and_parse(
         recorder=recorder,
         stage="phase2",
         entity={
@@ -476,6 +547,21 @@ def legacy_phase2_decision(
         reasoning_effort=reasoning_effort,
         image_paths=[] if saved is None else saved.get("image_files", []),
     )
+    protected = apply_phase2_discard_protection(
+        decision, enabled=protect_phase2_discards
+    )
+    if protected is not decision:
+        recorder.append(
+            {
+                "stage": "phase2_discard_guard",
+                "small_cluster_id": small_cluster_id,
+                "large_cluster_id": large_cluster_id,
+                "original_action": "DISCARD",
+                "effective_action": "ABSTAIN",
+                "original_rationale": decision["rationale"],
+            }
+        )
+    return protected
 
 
 class CheckpointingPipeline(pure_module.PureVLMCurationPipeline):
@@ -554,6 +640,33 @@ def main() -> None:
             "historical unseeded NumPy sampling protocol."
         ),
     )
+    parser.add_argument(
+        "--auto-discard-threshold",
+        type=int,
+        default=500,
+        help="Phase 0 size filter; 0 disables automatic deletion.",
+    )
+    parser.add_argument("--small-cluster-threshold", type=int, default=4000)
+    parser.add_argument(
+        "--final-minimum-threshold",
+        type=int,
+        default=5000,
+        help="Phase 3 size filter; 0 disables automatic deletion.",
+    )
+    parser.add_argument(
+        "--protect-large-discard-min-spikes",
+        type=int,
+        default=0,
+        help=(
+            "If positive, a Phase-1 DISCARD at or above this size is changed "
+            "to SPLIT when possible, otherwise ABSTAIN."
+        ),
+    )
+    parser.add_argument(
+        "--protect-phase2-discards",
+        action="store_true",
+        help="Change Phase-2 DISCARD decisions to ABSTAIN and preserve the cluster.",
+    )
     parser.add_argument("--use-mock", action="store_true")
     parser.add_argument("--output-dir", required=True)
     args = parser.parse_args()
@@ -592,8 +705,16 @@ def main() -> None:
 
     original_phase1 = pure_module.vlm_phase1_cluster_decision
     original_phase2 = pure_module.vlm_phase2_merge_decision
-    pure_module.vlm_phase1_cluster_decision = partial(legacy_phase1_decision, recorder=recorder)
-    pure_module.vlm_phase2_merge_decision = partial(legacy_phase2_decision, recorder=recorder)
+    pure_module.vlm_phase1_cluster_decision = partial(
+        legacy_phase1_decision,
+        recorder=recorder,
+        protect_large_discard_min_spikes=args.protect_large_discard_min_spikes,
+    )
+    pure_module.vlm_phase2_merge_decision = partial(
+        legacy_phase2_decision,
+        recorder=recorder,
+        protect_phase2_discards=args.protect_phase2_discards,
+    )
     agent_api.reset_call_tracking()
 
     manifest = {
@@ -632,9 +753,14 @@ def main() -> None:
             ),
         },
         "thresholds": {
-            "auto_discard": 500,
-            "small_cluster": 4000,
-            "final_minimum": 5000,
+            "auto_discard": args.auto_discard_threshold,
+            "small_cluster": args.small_cluster_threshold,
+            "final_minimum": args.final_minimum_threshold,
+        },
+        "discard_protection": {
+            "large_discard_min_spikes": args.protect_large_discard_min_spikes,
+            "behavior": "SPLIT when possible, otherwise ABSTAIN",
+            "phase2_discard_to_abstain": bool(args.protect_phase2_discards),
         },
         "current_safety_differences_from_historical_controller": [
             "provider failure stops instead of falling back to mock",
@@ -650,9 +776,9 @@ def main() -> None:
         manager=manager,
         features=features,
         sampling_rate=float(meta["Fs"]),
-        auto_discard_threshold=500,
-        small_cluster_threshold=4000,
-        final_minimum_threshold=5000,
+        auto_discard_threshold=args.auto_discard_threshold,
+        small_cluster_threshold=args.small_cluster_threshold,
+        final_minimum_threshold=args.final_minimum_threshold,
         provider=args.provider,
         model=args.model,
         use_mock=args.use_mock,

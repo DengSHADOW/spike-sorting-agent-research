@@ -1,39 +1,32 @@
 # Script Entry Points
 
-## New numbered entrypoints (MEArec simulation pipeline)
+## Current real-data priority
 
-Run these in order for the full research pipeline:
+Calibrate a domain skill on development data, then freeze the prompt, controller,
+observations and evaluator for a closed-model autonomous rollout baseline.
+The independent system/skill request builder and candidate skill v1 are ready
+for offline checks, not integrated into live runners or model-validated. See
+[implementation plan](../项目流程与实施计划_20261006.md) and
+[method and experiment status](../项目方法与实验状态.md).
 
-```bash
-# Stage 1: Generate MEArec recordings + overclustering
-uv run python scripts/01_simulate.py --config configs/settings/setting_001.yaml
+- `analysis/prepare_curation_skill.py`: development-only offline case preparation;
+  reuses saved PNGs/states and records hashes, separates audit targets from actor
+  previews, and refuses to overwrite an existing output directory. No API calls.
+  The 2026-10-06 artifact contains 35 cases (16 recorded expert edits + 19 terminal
+  constraints), 70 v0/v1 previews and 241 rationale rows. These are diagnostic
+  examples, not independent performance measurements.
+- `../configs/curation/`: fixed system, exact local-rule extraction v0, candidate
+  v1 and protocol decisions. These files do not automatically change old runners.
 
-# Resume one channel without changing the setting's configured n_channels
-uv run python scripts/01_simulate.py --config configs/settings/setting_002.yaml \
-  --channel-id ch_007
+- `run/run_real_manifest.py --mode preflight`: local real-data inventory checks, not VLM inference.
+- `run/run_single_channel_qwen35.py`: local safe real-data controller entry; model/provider are configurable. Its defaults are not the frozen historical protocol.
+- `run/run_pinned_upstream_baseline.py`, `run/run_legacy_prompt_rollout.py`, and Astra run/resume scripts: historical protocol reproduction, not the new default baseline.
+- `run/run_baseline_pipeline.py`: optional heuristic comparator; model-parameter forwarding and split-interface issues remain unresolved. Do not use it to claim an Astra baseline without fixes.
+- `analysis/` and `aggregate/`: retain audits, metrics and evidence collection; low-scoring runs remain valid records.
 
-# Stage 2: Build ground-truth action trajectories
-uv run python scripts/02_build_actions.py --config configs/settings/setting_001.yaml --all-channels
+No paid command below should be launched just to complete documentation cleanup.
 
-# Stage 3: Run teacher-student interaction
-uv run python scripts/03_run_trajectories.py --config configs/settings/setting_001.yaml \
-  --student-model gpt-4o --teacher-model gpt-4o --all-channels
-
-# Stage 4: Few-shot adaptation
-uv run python scripts/04_adapt.py --config configs/settings/setting_001.yaml
-
-# Stage 5: Evaluate alignment
-uv run python scripts/05_evaluate_alignment.py --config configs/settings/setting_001.yaml --all-channels
-
-# Stage 6: Sweep over all settings
-uv run python scripts/06_sweep.py --settings-dir configs/settings/ --jobs 4
-
-# Audit action-class coverage before adaptation/evaluation
-uv run python scripts/07_audit_action_coverage.py \
-  --config configs/settings/setting_001.yaml
-```
-
-## Legacy scripts (real MATLAB data)
+## Real MATLAB tools and historical runners
 
 ### `run/`
 End-to-end pipeline runs on real CH3/CH20/CH30/CH31 data:
@@ -54,10 +47,10 @@ uv run python scripts/run/run_all_channels.py
 
 ### `finetune/`
 Dataset construction and model training:
-- `build_finetune_dataset.py` — build JSONL + image assets from MATLAB action sheets
+- `build_finetune_dataset.py` — legacy standalone export plus shared builders still imported by both newer exporters; do not delete this module. Prefer provenance-preserving exporters for new datasets.
 - `export_real_manifest_actions.py` — ordered, provenance-preserving export for all labeled current-format real MATs
 - `prepare_hf_dataset.py` — convert to HuggingFace datasets format
-- `split_finetune_dataset_by_channel.py` — train/eval split by channel
+- `split_finetune_dataset_by_channel.py` — historical split utility; new studies must group by recording and audit prior evaluation exposure.
 - `train_qwen35_unsloth.py` — Unsloth Vision SFT for Qwen3.5-4B
 - `train_gemma4_unsloth.py` — Unsloth Vision SFT for Gemma-4-E4B
 
@@ -108,7 +101,7 @@ files are excluded. Verify a downloaded bundle from inside its directory with
 
 ### `analysis/`
 - `analyze_action_baseline.py` — generate a consistent action report with precision/recall/F1, confusion, format compliance, numeric summaries, and error cases
-- `run_numeric_action_baseline.py` — train RF/HistGradientBoosting on train recording blocks only, select by grouped CV, and evaluate once on CH30 without using images or the final-test block
+- `run_numeric_action_baseline.py` — train RF/HistGradientBoosting on train recording blocks only, select by grouped CV, and evaluate on CH30 without images; the original experiment excluded the old final-test block, which has since been inspected by other work
 - `compute_human_curation.py` — analyze human curation patterns
 - `evaluate_baseline.py` — evaluate baseline pipeline
 - `generate_curation_stats_table.py` — statistics tables
@@ -141,3 +134,37 @@ and does not misrepresent it as a learned merge classifier.
 ### `demo/`
 - `demo_simulated_teacher_feedback.py` — one-shot teacher feedback demo
 - `run_channel_teacher_budget.py` — limited teacher interaction budget demo
+
+## Paused simulation pipeline — historical reference
+
+Simulation work is paused. These commands document the old Stage 1–6 workflow;
+they are not the current default and are not executed by this cleanup:
+
+```bash
+# Stage 1: Generate MEArec recordings + overclustering
+uv run python scripts/01_simulate.py --config configs/settings/setting_001.yaml
+
+# Resume one channel without changing the setting's configured n_channels
+uv run python scripts/01_simulate.py --config configs/settings/setting_002.yaml \
+  --channel-id ch_007
+
+# Stage 2: Build ground-truth action trajectories
+uv run python scripts/02_build_actions.py --config configs/settings/setting_001.yaml --all-channels
+
+# Stage 3: Run teacher-student interaction
+uv run python scripts/03_run_trajectories.py --config configs/settings/setting_001.yaml \
+  --student-model gpt-4o --teacher-model gpt-4o --all-channels
+
+# Stage 4: Few-shot adaptation
+uv run python scripts/04_adapt.py --config configs/settings/setting_001.yaml
+
+# Stage 5: Evaluate alignment
+uv run python scripts/05_evaluate_alignment.py --config configs/settings/setting_001.yaml --all-channels
+
+# Stage 6: Sweep over all settings
+uv run python scripts/06_sweep.py --settings-dir configs/settings/ --jobs 4
+
+# Audit action-class coverage before adaptation/evaluation
+uv run python scripts/07_audit_action_coverage.py \
+  --config configs/settings/setting_001.yaml
+```
