@@ -86,7 +86,7 @@ Complete-run usage: 21 API calls, 41,873 input tokens (1,536 cached), 11,318 out
 2. Closed-loop differences are amplified: one early SPLIT creates new states and more API calls. In the completed rerun, later hard filters collapsed the different path back to the same terminal assignment.
 3. The old 500/5,000 filters can dominate the endpoint and were not biologically calibrated in this repository. The exactly matched CH30 terminal F1 therefore cannot be attributed only to stable VLM reasoning.
 4. The current simplified fixed-state accuracy and old rollout F1 are not a prompt A/B test: action-level versus terminal metrics, human versus model-visited states, three versus four views, and controller semantics differ.
-5. Whether the simplified prompt lowers accuracy remains unmeasured. The required experiment is same states, same image bytes, same model/version/effort/output contract, with only `minimal-zero-shot-v1` versus a frozen detailed/domain-policy prompt changed.
+5. Whether the simplified prompt lowers accuracy remains unmeasured. The required experiment is same states, same image bytes, same model/version/effort/output contract, with only `minimal-zero-shot-v1` (historical configuration ID, not the new minimal-prompt full-rollout baseline) versus a frozen detailed/domain-policy prompt changed.
 
 ## API accounting for this reproduction investigation
 

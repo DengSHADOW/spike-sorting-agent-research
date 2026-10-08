@@ -311,3 +311,245 @@ def test_tolerable_split_and_expert_improvement(prepared):
     assert len(result['expert_improvements']) == 1
     assert result['expert_improvements'][0]['v0']['rationale'] == 'unchanged original text'
     assert result['preregistered_conditions']['v1_harmful_rate_lower'] is False
+
+
+# Prospective multi-round rules: all data below are synthetic or read-only metadata.
+from scripts.analysis import skill_iteration_rules as it
+from scripts.analysis import score_skill_iterations as iteration_report
+
+
+@pytest.fixture
+def iteration_rules():
+    return it.load_rules(r.ROOT / 'configs/curation/replay_scoring_v2.json')
+
+
+def votes_for(*actions):
+    return [{'action': a, 'rationale': f'original rationale: {a}'} for a in actions]
+
+
+def iteration_cases():
+    cases = []
+    for i, kind in enumerate(['expert', 'unit', 'noise', 'mixed']):
+        for j in range(3):
+            c = dict(case_id=f'{kind}{j}', dataset_id='cM2-e004_004-006_CH3', phase='phase1',
+                     image_layout='local_four' if kind == 'expert' else 'legacy_three',
+                     target_type='recorded_expert_edit' if kind == 'expert' else 'derived_terminal_constraint')
+            c.update({'expert_action': 'DISCARD'} if kind == 'expert' else {'constraint': it.CONSTRAINTS[i-1]})
+            cases.append(c)
+    return cases
+
+
+def iteration_arms(cases, candidate='v1'):
+    actions = {'expert': 'DISCARD', 'unit': 'KEEP', 'noise': 'DISCARD', 'mixed': 'SPLIT'}
+    arm = {c['case_id']: votes_for(*([actions[c['case_id'][:-1]]]*5)) for c in cases}
+    return {'v0': copy.deepcopy(arm), candidate: copy.deepcopy(arm)}
+
+
+def test_iteration_majority_tie_and_plurality():
+    assert it.vote(votes_for('KEEP', 'KEEP', 'KEEP', 'KEEP', 'SPLIT'), 5)['stable']
+    two_one = it.vote(votes_for('KEEP', 'KEEP', 'SPLIT'), 3)
+    assert two_one['action'] == 'KEEP' and not two_one['stable']
+    tie = it.vote(votes_for('KEEP', 'KEEP', 'DISCARD', 'DISCARD', 'SPLIT'), 5)
+    assert tie['tie'] and tie['action'] is None
+    plurality = it.vote(votes_for('KEEP', 'KEEP', 'KEEP', 'DISCARD', 'DISCARD', 'SPLIT'), 6)
+    assert not plurality['tie'] and plurality['no_majority'] and plurality['action'] is None
+    assert it.vote(votes_for('KEEP', 'KEEP'), 5)['action'] is None
+
+
+def stats(counts):
+    return dict(counts=dict(zip((*it.RISKS, 'expert_correct'), counts)), stable=True,
+                denominators=dict(zip((*it.RISKS, 'expert_correct'), [7, 8, 4, 16])))
+
+
+@pytest.mark.parametrize('base,candidate,winner,status', [
+    ([1, 4, 1, 12], [0, 3, 0, 13], None, 'within_tolerance'),
+    ([0, 4, 0, 12], [0, 2, 0, 12], 'candidate', 'eligible_for_review'),
+    ([0, 4, 0, 12], [2, 2, 0, 12], None, 'tradeoff_no_winner'),
+    ([0, 4, 0, 12], [1, 2, 0, 12], 'candidate', 'eligible_for_review'),
+    ([0, 4, 0, 12], [0, 2, 2, 12], None, 'tradeoff_no_winner'),
+    ([0, 4, 0, 12], [0, 2, 0, 10], None, 'tradeoff_no_winner'),
+    ([0, 4, 0, 12], [0, 4, 0, 14], 'candidate', 'eligible_for_review'),
+    ([0, 4, 0, 12], [0, 6, 0, 9], 'baseline', 'eligible_for_review'),
+])
+def test_iteration_joint_metrics_and_tolerance(iteration_rules, base, candidate, winner, status):
+    outcome = it.compare_stats(stats(base), stats(candidate), iteration_rules)
+    assert (outcome['winner'], outcome['status']) == (winner, status)
+
+
+def test_iteration_instability_not_dropped(iteration_rules):
+    cases = iteration_cases()
+    arms = iteration_arms(cases)
+    arms['v1']['noise0'] = votes_for('KEEP', 'KEEP', 'KEEP', 'DISCARD', 'DISCARD')
+    result = it.score_round(cases, arms, iteration_rules, 5)
+    assert result['by_version']['v1']['denominators']['pure_noise_keep'] == 3
+    assert result['comparisons']['v1']['status'] == 'insufficient_or_unstable'
+    arms['v1']['noise0'] = []
+    result = it.score_round(cases, arms, iteration_rules, 5)
+    assert result['by_version']['v1']['unresolved']['pure_noise_keep'] == 1
+    assert result['by_version']['v1']['rate_bounds']['pure_noise_keep'] == [0, 1/3]
+
+
+def test_iteration_budget_and_round_limits(iteration_rules):
+    assert not it.budget_gate(2, None, 0, 0, 5, iteration_rules)['allowed']
+    assert not it.budget_gate(4, 100, 0, 0, 1, iteration_rules)['allowed']
+    assert not it.budget_gate(2, 10, 5, 2, 4, iteration_rules)['allowed']
+    result = it.budget_gate(3, 10, 5, 2, 3, iteration_rules)
+    assert result['allowed'] and result['inference_authorized'] is False
+    for cap in [float('nan'), float('inf'), -1, True]:
+        with pytest.raises(ValueError):
+            it.budget_gate(2, cap, 0, 0, 1, iteration_rules)
+
+
+def test_iteration_round_flow_and_fallback(iteration_rules):
+    result = {'comparisons': {v: dict(winner=None, status='within_tolerance') for v in ('S1', 'S2', 'S3', 'S4', 'S5')}}
+    assert it.fallback_winner([result], [], iteration_rules) == 'v0'
+    assert it.next_round(2, result, [], iteration_rules)['reason'] == 'no_single_improvement_freeze_v0'
+    result['comparisons']['S2'].update(winner='candidate', status='eligible_for_review')
+    assert it.next_round(2, result, [], iteration_rules)['reason'] == 'await_manual_review'
+    assert it.next_round(2, result, ['S2'], iteration_rules)['next_round'] == 3
+    assert it.fallback_winner([result], ['S2'], iteration_rules) == 'S2'
+    assert it.next_round(3, result, ['S2'], iteration_rules)['next_round'] is None
+    combined_failed = {'comparisons': {'combined': dict(winner=None, status='within_tolerance')}}
+    assert it.next_round(3, combined_failed, ['S2'], iteration_rules, [result])['selected'] == 'S2'
+    result['comparisons']['S1'].update(winner=None, status='insufficient_or_unstable')
+    assert it.next_round(2, result, ['S2'], iteration_rules)['reason'] == 'insufficient_not_evidence_of_no_improvement'
+
+
+def test_iteration_correction_rescores_every_round_and_version(iteration_rules):
+    cases = iteration_cases()
+    runs = {name: {'arms': iteration_arms(cases), 'repeats': 5} for name in ('round1', 'round2', 'round3')}
+    original = it.rescore_campaign(cases, list(runs), runs, iteration_rules)
+    changed = copy.deepcopy(iteration_rules)
+    changed['corrections'] = [dict(case_id='expert0', field='expert_action', before='DISCARD', after='SPLIT',
+                                   reason='fixture correction', evidence='fixture source', reviewer='fixture reviewer')]
+    scored = it.rescore_campaign(cases, list(runs), runs, changed)
+    for name in runs:
+        for v in ('v0', 'v1'):
+            assert original[name]['by_version'][v]['counts']['expert_correct'] == 3
+            assert scored[name]['by_version'][v]['counts']['expert_correct'] == 2
+    assert cases[0]['expert_action'] == 'DISCARD'
+    with pytest.raises(ValueError):
+        it.rescore_campaign(cases, list(runs), {'round3': runs['round3']}, changed)
+
+
+def test_iteration_added_group_is_separate(iteration_rules):
+    cases = iteration_cases()
+    extra = copy.deepcopy(cases[0]); extra['case_id'] = 'extra'
+    arms = iteration_arms(cases)
+    for arm in arms.values():
+        arm['extra'] = votes_for(*(['KEEP']*5))
+    result = it.rescore_campaign(cases, ['r'], {'r': {'arms': arms, 'repeats': 5}}, iteration_rules, {'extra_set': [extra]})['r']
+    assert result['by_version']['v0']['denominators']['expert_correct'] == 3
+    assert result['additional_groups']['extra_set']['by_version']['v0']['denominators']['expert_correct'] == 1
+    assert result['additional_groups']['extra_set']['comparisons']['v1']['winner'] is None
+
+
+def test_iteration_report_small_effect_and_honest_attribution(iteration_rules):
+    cases = iteration_cases()
+    arms = iteration_arms(cases)
+    arms['v1']['expert0'] = votes_for(*(['KEEP']*5))
+    result = it.score_round(cases, arms, iteration_rules, 5)
+    text = iteration_report.render_report({'r': result}, iteration_rules, 'fixturehash')
+    assert 'skill 改动对决策影响很小' in text
+    assert '证据不足／多因素，待复核' in text
+    assert 'original rationale: KEEP' in text and 'original rationale: DISCARD' in text
+    assert result['comparisons']['v1']['decision_changes'] == 1
+
+
+def test_iteration_manifest_freeze_and_rule_revision(tmp_path, iteration_rules):
+    rules_path = r.ROOT / 'configs/curation/replay_scoring_v2.json'
+    skills = {}
+    for name in ['v0', 'S1', 'S2', 'S3', 'S4', 'S5']:
+        p = tmp_path / (name + '.json'); p.write_text(json.dumps({'phase1': name, 'phase2': name}))
+        skills[name] = p
+    fixture = tmp_path / 'input.json'; fixture.write_text('{}')
+    files = {key: fixture for key in ['system', 'observations', 'model_schema', 'code', 'estimate', 'budget']}
+    files['cases'] = r.ROOT / iteration_rules['original_cases']['path']
+    manifest = it.freeze_manifest(2, skills, files, rules_path, tmp_path / 'manifest.json', iteration_rules)
+    assert manifest['sendable'] is False and len(manifest['jobs']) == 1050
+    it.verify_manifest(manifest, rules_path)
+    tampered = copy.deepcopy(manifest); tampered['jobs'].pop()
+    with pytest.raises(ValueError):
+        it.verify_manifest(tampered, rules_path)
+    extra_files = {}
+    for name in ('z_group', 'a_group'):
+        case = iteration_cases()[0]; case['case_id'] = name
+        p = tmp_path / (name + '.jsonl'); p.write_text(json.dumps(case)+'\n')
+        extra_files[name] = p
+    extended = it.freeze_manifest(2, skills, files, rules_path, tmp_path/'extended.json', iteration_rules,
+                                  additional_groups=extra_files)
+    it.verify_manifest(extended, rules_path)
+    assert len(extended['jobs']) == 37 * 6 * 5
+    revision = json.loads(rules_path.read_text())
+    revision['correction_revision_of'] = dict(path=str(rules_path), sha256=it.file_hash(rules_path))
+    revision['corrections'] = [dict(case_id='fixture', field='expert_action', before='DISCARD', after='SPLIT',
+                                  reason='fixture', evidence='fixture', reviewer='fixture')]
+    revision_path = tmp_path / 'rules_revision.json'; revision_path.write_text(json.dumps(revision))
+    it.verify_manifest(manifest, revision_path)
+    revision['selection']['minimum_improvement_cases'] = 1
+    revision_path.write_text(json.dumps(revision))
+    with pytest.raises(ValueError):
+        it.verify_manifest(manifest, revision_path)
+    skills['S1'].write_text('changed after freeze')
+    with pytest.raises(ValueError):
+        it.verify_manifest(manifest, rules_path)
+
+
+def test_iteration_hash_change_rejected_and_historical_no_winner(iteration_rules, tmp_path):
+    with pytest.raises(ValueError):
+        it.verify_manifest({'rules_sha256': 'wrong'}, r.ROOT / 'configs/curation/replay_scoring_v2.json')
+    cases = iteration_cases(); arms = iteration_arms(cases)
+    arms = {v: {cid: rows[:1] for cid, rows in arm.items()} for v, arm in arms.items()}
+    result = it.score_round(cases, arms, iteration_rules, 1)
+    assert result['comparisons']['v1']['winner'] is None
+    assert result['comparisons']['v1']['status'] == 'insufficient_or_unstable'
+
+
+def test_iteration_correction_chain_retains_old_run_compatibility(tmp_path):
+    base = r.ROOT / 'configs/curation/replay_scoring_v2.json'
+    raw = json.loads(base.read_text())
+    raw['correction_revision_of'] = dict(path=str(base), sha256=it.file_hash(base))
+    raw['corrections'] = [dict(case_id='x', field='expert_action', before='DISCARD', after='SPLIT',
+                               reason='fixture', evidence='fixture', reviewer='fixture')]
+    first = tmp_path / 'first.json'; first.write_text(json.dumps(raw))
+    raw['correction_revision_of'] = dict(path=str(first), sha256=it.file_hash(first))
+    raw['corrections'].append(dict(case_id='y', field='expert_action', before='SPLIT', after='DISCARD',
+                                   reason='fixture', evidence='fixture', reviewer='fixture'))
+    second = tmp_path / 'second.json'; second.write_text(json.dumps(raw))
+    it.verify_rules_revision(it.file_hash(base), second)
+
+
+def test_single_pass_rules_preserve_old_repeat_plan():
+    old = r.ROOT / 'configs/curation/replay_scoring_v2.json'
+    assert it.file_hash(old) == '4920efdf03b82d39f2ab7c5910d6909a0a0b41b0ff8ad8667c63506b3f71acdb'
+    assert it.load_rules(old)['voting']['planned_repeats'] == 5
+    rules = it.load_rules(r.ROOT / 'configs/curation/replay_scoring_v3.json')
+    assert rules['voting']['planned_repeats'] == 1
+    assert rules['selection']['single_pass']
+    assert 35 * len(rules['rounds']['round_2']['versions']) == 210
+
+
+def test_single_pass_no_stability_claim_or_automatic_missing_vote():
+    rules = it.load_rules(r.ROOT / 'configs/curation/replay_scoring_v3.json')
+    cases = iteration_cases()
+    arms = {v: {cid: rows[:1] for cid, rows in arm.items()}
+            for v, arm in iteration_arms(cases).items()}
+    result = it.score_round(cases, arms, rules, 1)
+    assert result['by_version']['v0']['stable'] is None
+    assert all(v['consistency'] is None for v in result['votes']['v0'].values())
+    assert result['comparisons']['v1']['status'] == 'within_tolerance'
+    report = iteration_report.render_report({'fixture': result}, rules, 'fixturehash')
+    assert '重复一致率 N/A' in report and '计数为单次观测动作' in report
+    assert '| 0 | N/A |' in report
+    arms['v1'].pop(cases[0]['case_id'])
+    missing = it.score_round(cases, arms, rules, 1)
+    assert missing['comparisons']['v1']['winner'] is None
+    assert missing['comparisons']['v1']['status'] == 'insufficient_or_unstable'
+
+
+def test_single_pass_rules_reject_mismatched_repeat_plan():
+    rules = it.load_rules(r.ROOT / 'configs/curation/replay_scoring_v3.json')
+    cases = iteration_cases()
+    result = it.score_round(cases, iteration_arms(cases), rules, 5)
+    assert result['comparisons']['v1']['winner'] is None
+    assert result['comparisons']['v1']['status'] == 'insufficient_or_unstable'

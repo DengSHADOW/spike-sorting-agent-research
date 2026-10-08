@@ -1,6 +1,6 @@
 # spike-sorting-agent 研究笔记
 
-**最后更新**：2026-10-06
+**最后更新**：2026-10-07
 
 阅读约定：保留全部日期记录；旧条目的数据与计划按当时条件理解，错误由后续更正条目说明。当前方法和实验索引见 [项目方法与实验状态](项目方法与实验状态.md)；仅文末待办是当前执行清单。
 
@@ -654,7 +654,7 @@ Qwen/Gemma 是仓库已有训练脚本支持的候选 baseline，并非 proposal
 - Qwen3.5-2B：accuracy `0.067`、macro-F1 `0.333`；Qwen3.5-4B：`0.378/0.530`；Qwen3.5-9B：`0.500/0.570`；Gemma-4-E4B-it：`0.544/0.578`。
 - DISCARD 是共同失败点：2B/9B/Gemma 为 `0/41`，4B 仅 `1/41`。Gemma 的准确率恰好等于同集 stage-majority 诊断参照 `49/90`，不能据此证明视觉输入有增量价值。
 - 四模型均命中 6/6 MERGE，但 CH30 没有 NOT_MERGE 负例；该结果不能证明完整 merge 判断能力。现有日志也没有人工 KEEP ground truth，因此本轮只属于 expert edit-action baseline。
-- 模型扩容从 2B 到 9B 有明显收益，但没有解决 DISCARD；停止继续无目的增加 zero-shot 模型。第一版 SFT 主候选暂定 Qwen3.5-9B，Gemma 保留为跨架构复核。
+- 模型扩容从 2B 到 9B 有明显收益，但没有解决 DISCARD；停止继续无目的增加 未做领域微调的模型。第一版 SFT 主候选暂定 Qwen3.5-9B，Gemma 保留为跨架构复核。
 - 结果归档已下载并 checksum 通过；统一分析见 `docs/archive/fixed_state_experiments_20260921_22.md#open-vlm`。vLLM 模型进程已关闭，Pod 本身仍需在 Runpod 页面 Stop。
 
 ### 当时待办（历史）：真实数据线（高 → 低）
@@ -679,7 +679,7 @@ Qwen/Gemma 是仓库已有训练脚本支持的候选 baseline，并非 proposal
 - CH30：RF split-stage `78/84 = 0.929`；overall `84/90 = 0.933`、macro-F1 `0.952`。DISCARD P/R/F1 `1.000/0.854/0.921`，SPLIT `0.878/1.000/0.935`；6 个错误全部为 DISCARD→SPLIT。
 - HistGradientBoosting 在 CH30 为 85/90，但 train grouped CV 略低，只作 secondary，不能看完 validation 后事后换主模型。
 - merge train 142 条和 CH30 6 条全部为 MERGE，没有 NOT_MERGE/merge-stage DISCARD；6/6 仅来自显式 constant MERGE，不是学得的 merge 泛化能力。
-- RF 主要使用 `n_spikes`（importance 0.601）和 `n_overclusters`（0.241）。这证明专家动作与数值指标高度相关，也提示 numeric shortcut；不能由此断言图像无用，因为 RF 有 831 条监督而 base VLM 是 zero-shot。
+- RF 主要使用 `n_spikes`（importance 0.601）和 `n_overclusters`（0.241）。这证明专家动作与数值指标高度相关，也提示 numeric shortcut；不能由此断言图像无用，因为 RF 有 831 条监督而 base VLM 未做领域微调。
 - 完整分析见 `docs/archive/fixed_state_experiments_20260921_22.md#numeric`；脚本为 `scripts/analysis/run_numeric_action_baseline.py`，结果和主模型位于 `output/numeric_action_baseline_20260921/`，checksum 已通过。
 
 ### 当时待办（历史）：真实数据线（高 → 低）
@@ -720,7 +720,7 @@ Qwen/Gemma 是仓库已有训练脚本支持的候选 baseline，并非 proposal
 
 - 确认当前 CH30 fixed-state 对照与旧 GPT rollout 使用不同输入 prompt。当前样本沿用 finetune 导出器的 `gemma4_train_reasoned` 简化 profile；旧 rollout 使用明确的 neuronal morphology、split 和 merge 领域规则。
 - 该 profile 在首个可追溯 clean snapshot 中已存在，没有证据表明它是“为提高 Gemma 准确度而经验证的简化”。更准确的定性是：SFT 数据 profile 被直接复用于 fixed-state 评测。
-- `action-only` 输出约束保留；它与“删去输入领域规则”是两件事。后者可能导致 zero-shot VLM 的 KEEP/SPLIT 偏置，但没有单变量 prompt ablation 前不定量归因。
+- `action-only` 输出约束保留；它与“删去输入领域规则”是两件事。后者可能导致 未做领域微调的 VLM 的 KEEP/SPLIT 偏置，但没有单变量 prompt ablation 前不定量归因。
 - README 的 GPT-5.1 历史 aggregate 为 `P/R/F1=0.7653/0.8327/0.7671`；当前保存终态重评估为 `0.7735/0.8327/0.7718`。差异来自 CH31 的 FP 计数 `20,933` vs `18,065`；重评估不是新模型运行。
 - 主线暂时转为 legacy 结果复现：先统一重算已保存终态，再以 CH30 + GPT-5.1 做带旧详细 prompt 和旧数量阈值的完整 rollout；新结果使用独立输出目录，不覆盖旧实验。
 - 首次复现误用当前 500-waveform 绘图合约，CH30/211 从历史 `DISCARD` 变为 `SPLIT`，形成超过历史 11 次决策的长递归；在 20 个合法决策后主动停止。精确重放历史 CH30/211 prompt+三图时，同一实际模型版本再次输出 `DISCARD`，证明图像预处理是分叉的主要原因。
@@ -801,7 +801,7 @@ Qwen/Gemma 是仓库已有训练脚本支持的候选 baseline，并非 proposal
 ## 2026-09-23 — 双-harness scope 记录
 
 - JianZhi 说明项目原始意图可能包含两套 harness，而不是要求所有路线共用一份 prompt。harness 是 prompt、观察、反馈/更新和评估的完整实验框架。
-- **Harness A：skill-rich zero-shot expert。** 给 base VLM 详细领域规则，测试不训练时能达到的 curation 水平；属于强 prompt-only baseline。
+- **Harness A：detailed-rule-prompt。** 给 base VLM 详细领域规则，测试不训练时能达到的 curation 水平；属于强 prompt-only baseline。
 - **Harness B：feedback-learning student。** student 从无 spike-curation 专项训练/记忆的预训练模型开始，只给基本任务定义，再利用 teacher feedback、trajectory、RAG/SFT 等逐步获得 skill。
 - 没有 human-in-the-loop 时，teacher model 用 oracle/人工参考动作和 reasoning 模拟领域专家反馈；human/GT 才是监督真值，teacher 主要是反馈生成器，不能未经验证充当新 ground truth。
 - 两套 harness 可以有不同 prompt；应在每套 harness 内分别冻结 prompt、输入顺序、输出 schema、controller 语义和评估协议。此前“冻结一个主 prompt”更正为“冻结每个 harness 的版本化协议”。
@@ -811,7 +811,7 @@ Qwen/Gemma 是仓库已有训练脚本支持的候选 baseline，并非 proposal
 ### 当时待办（历史）：真实数据线（高 → 低）
 
 - [ ] 为 Harness A/B 分别写出并冻结协议清单；明确 prompt version/hash、输入、允许动作、输出 schema、更新机制和评估 split。
-- [ ] Harness A 只保留为明确标注的 zero-shot expert baseline，不继续混用不同历史 prompt artifact。
+- [ ] Harness A 只保留为明确标注的 详细规则提示 baseline，不继续混用不同历史 prompt artifact。
 - [ ] Harness B 使用 train recordings 完成 Qwen3.5-9B action-only images-only 与 images+numeric LoRA/SFT，并与 numeric RF 比较。
 - [ ] 明确 teacher feedback 的 human/GT provenance；只在 train split 使用 teacher/RAG，不向 validation/final-test 泄漏。
 - [ ] fixed-state 安全指标达标后再做 student autonomous rollout；模型与协议冻结后 final-test 只使用一次。
@@ -824,7 +824,7 @@ Qwen/Gemma 是仓库已有训练脚本支持的候选 baseline，并非 proposal
 
 ## 2026-09-23 — GPT-5.1 谨慎版 prompt 四通道 full rollout
 
-- 已用 JianZhi 源码中共用的谨慎版 prompt 重跑 CH3/20/30/31；模型固定为 `gpt-5.1-2025-11-13`，reasoning effort `medium`，不设总调用上限。这是 Harness A zero-shot expert 闭环，不是 fixed-state 测试或 SFT student。
+- 已用 JianZhi 源码中共用的谨慎版 prompt 重跑 CH3/20/30/31；模型固定为 `gpt-5.1-2025-11-13`，reasoning effort `medium`，不设总调用上限。这是 Harness A 详细规则提示闭环，不是 fixed-state 测试或 SFT student。
 - 四通道均自然完成：共 `68` 次 provider calls，`174,606` tokens，按当前公开价格估算 `$0.4861`。
 
 | 通道 | Calls | 最终 units | Assigned spikes | Precision | Recall | F1 |
@@ -888,7 +888,7 @@ Qwen/Gemma 是仓库已有训练脚本支持的候选 baseline，并非 proposal
 
 ## 2026-09-29 — GPT-6 Astra high 分通道保护实验
 
-- 用户授权以 `gpt-6-astra`、reasoning `high` 重跑四通道 full rollout，总预算 $30；属于 Harness A 领域规则增强 zero-shot，不是 SFT 或固定人工状态动作测试。
+- 用户授权以 `gpt-6-astra`、reasoning `high` 重跑四通道 full rollout，总预算 $30；属于 Harness A 领域规则提示实验，不是 SFT 或固定人工状态动作测试。
 - CH30/31 保持 9/28 固定上游 controller；CH3/20 采用删除保护，关闭前后数量过滤、拦截大 cluster/Phase-2 删除，并保留无合并目标的 cluster。两组协议不同，不报告混合宏平均作为模型能力提升。
 - Prompt、三图和 action+rationale schema 不重写。四 MAT 哈希与 9/28 一致；CH30、CH3 首状态的 prompt、三图哈希和 schema 均与 9/28 对应请求一致。28 项离线测试及两组真实图片离线预检通过。
 - 单请求输出预算保留 4,000 tokens（含 reasoning）；请求前计数并预留费用。预算不足、截断或接口失败即停止，不回退 mock，不自动重跑。模型建议与保护后的实际动作分别记录。
@@ -925,7 +925,7 @@ Qwen/Gemma 是仓库已有训练脚本支持的候选 baseline，并非 proposal
 
 - [ ] 完成离线恢复校验后继续本轮四通道，累计费用限制 $70；已完成通道单独汇报，未完成不计终态分数。
 - [ ] 比较终态 Precision/Recall/F1、动作分布、保护次数和费用，区分 unprotected CH30/31 与 protected CH3/20，不作混合模型能力结论。
-- [ ] 整理人工示范 SFT 的数据与划分，保留与 zero-shot rollout 不同的实验定位；训练尚未实施。
+- [ ] 整理人工示范 SFT 的数据与划分，保留与 详细规则提示 rollout 不同的实验定位；训练尚未实施。
 
 ### 当时待办（历史）：模拟数据线
 
@@ -977,11 +977,44 @@ Qwen/Gemma 是仓库已有训练脚本支持的候选 baseline，并非 proposal
 - 明确本地短间隔比例与 SpikeInterface 污染估计不同；2 ms/0.6% 未经本任务校准，形态与拆分判据仍为候选。原 live 小样本返回 0 等一致性问题留待阶段 4，不在本轮修改。
 - 仅文档更新；system、skill 和运行代码未变，未调用付费模型，未改变历史结果或底部待办。
 
+## 2026-10-06 — baseline 描述与当前范围更正
+
+- 文档中旧 GPT/Astra 闭环按条件改称“详细规则提示 rollout”；Qwen/Gemma/API 单步实验称“固定状态动作评测”。保留历史日期、数值和实验配置，不把旧实验改称 few-shot。
+- `zero-shot baseline` 标签仅用于当前确认的 minimal-prompt 完整闭环：最少任务说明、图例、动作含义和输出格式；不加载旧 system/skill、示范、专家评论或反馈。
+- 已保存两阶段提示词、哈希和结果归档规范，见 [新实验目录](<zero-shot baseline/README.md>)。尚未接入运行器、尚无本配置结果。历史配置标识 `minimal-zero-shot-v1` 仅用于追溯，不是这项新完整闭环的结果。
+
+## 2026-10-07 — 补回 stepwise 与完整闭环双评测
+
+- 纠正前一版 minimal-prompt 文档只写 full rollout 的遗漏：**专家状态下的 stepwise 动作一致性与自主 rollout 终态质量都必须评测**，同一套 prompt/模型/观测，在同一份报告中分栏统计，不混成一个 accuracy。
+- Stepwise 通过离线专家动作回放重建操作前状态，模型预测不推进下一样本；rollout 用模型动作推进。专家标签只在状态重建/评分侧使用，不给模型答案、评论或反馈。轨迹分叉后不按步骤序号直接比较。
+- Stepwise 报准确率、逐类 precision/recall/F1、混淆矩阵与覆盖率；给定对象的判断不等于自主选对对象。没有可靠 KEEP/NOT_MERGE 标签时不补造。Rollout 报 P/R/F1、误删/误保留与群数，并披露 many-to-one 匹配限制。
+- 同日后续：双评测入口与评分已接入，67 项离线测试通过；295 条日志的前后状态哈希均匹配。CH20 第 5 步 `s 0` 为 noise 群恢复，超出活跃群 actor 接口，预先排除评分但保留状态回放；实际评分分母 294。MAT v5 读取兼容已补齐，未改原始数据/提示词。294 条请求及图片哈希逐一校验通过，已按授权启动共享独立 $50 的 Astra/high 任务；首批真实响应已返回，不代表完整实验完成。规范、manifest 哈希及最新状态见 [zero-shot baseline](<zero-shot baseline/README.md>)；保留此前日期记录。
+
+## 2026-10-08 — minimal-prompt 双评测完成
+
+- Astra/high；原 minimal prompt、四图/三图观测、controller 与评测器保持冻结。CH30 追加预算续跑新增 529 次请求全部成功，前 1,060 条只本地重放；99 项离线测试、终态和账本核验通过。四通道完整闭环现均已完成，进程退出。
+- Stepwise **102/294（34.69%）**；CH31/CH3/CH20/CH30 终态 F1 **0.5581/0.3327/0.3613/0.3183**，简单均值 **0.3926**，初态均值 **0.3536**。不是单一 accuracy 或 SOTA，通道已曝光，many-to-one 匹配对碎片化处罚不足。
+- 全通道误删专家 spikes 为 0；主要问题是噪声误保留。CH30 保留噪声 318,201，11,461 个专家 spikes 仍在但与另一 unit 混群，故 Recall=0.8742。CH30 合并比较 1,330 次中 1,280 次 NOT_MERGE；任务结果弱且调度调用量大。
+- 最后续跑约 104 分钟，新增标准估算 $17.730030、保守费用 $20.1635625。全实验 stepwise/rollout 标准估算 **$10.425039 / $94.284763**，保守 **$12.0844315 / $107.8665730**，合计 $119.9510045（含旧 HTTP503 未结算预留 $0.2441875），未用满 $150 上限。均非账单，不自动继续消费。
+- 记录 KEEP 噪声、同输入 KEEP→SPLIT 翻转、合并前复查不执行 SPLIT 的具体例子，见 [失败归档](实验失败案例分析与归档.md)；条件与结果见 [最终汇总](<zero-shot baseline/README.md>)。不能把差分全归因于 prompt 或模型，不修改本轮结果。
+
+### 历次预算与恢复记录
+
+2026-10-07 21:24 UTC 预算停止：stepwise **102/294（34.69%）**；CH31/CH3/CH20 完整闭环 F1 **0.5581/0.3327/0.3613**。CH20 此次完成 260 次决策，终态保留 53 群/83,746 spikes，噪声误保留 65,281，专家 spikes 误删 0；相比初态 F1=0.3597 仅小幅变化。CH30 成功 1,060 次决策、合并源群完成 52/94，下一次请求预留不足而停止，不能把中途状态当最终结果。检查点哈希核验通过，进程退出，未再发送请求。本次续跑新增 1,266 次推理均成功；历史响应仅本地重放。标准价估算分项：stepwise $10.425039、rollout $76.554733；保守账本分项 $12.0844315 / $87.7030105，合计 $99.787442，含旧 HTTP503 未结算预留 $0.2441875，非官方账单。详见 [汇总报告](<zero-shot baseline/results/minimal_astra_high_dual_20261007_retry503/REPORT.md>)。保留以下当时的续跑记录。
+
+2026-10-07 服务端错误重试：第一次续跑成功至 CH20 第 54 次，第 55 次收到 HTTP 503 后按零自动重试规则停止。累计保守金额 $50.4833335，含 $0.2441875 未结算预留。用户要求再次尝试；恢复前 54 次历史决策的状态与请求核验通过，82 项离线测试通过，已在独立 `retry503` 目录启动。仍使用累计 $100 上限，不把充值视为新增预算，原提示词/模型/控制器不变，费用继续分项。
+
+2026-10-07 预算续跑：首批 stepwise 294/294，CH31 F1=0.5581、CH3 F1=0.3327；CH20 44 次后因预算停止，CH30 闭环未开始。首批保守费用分项：stepwise $12.0844315、rollout $37.694702。用户追加 $50，累计限额 $100；新增续跑入口离线重建 CH20 原模型轨迹与调度（不重复付费），核验后续跑 CH20/CH30。76 项离线测试通过；保留旧结果，不改提示词。
+
 ### 最新待办：实测数据线（高 → 低）
 
-- [ ] 阶段 4：修正 Phase 2 ISI、接入独立契约，验证全通道一致的执行语义与异常处理；记录为程序改动，不混称 skill 收益。
-- [ ] 确定最小观察/绘图规范；另行锁定付费范围、预算及停止条件，验证候选 skill，不自动启动旧批次。
-- [ ] 开发验证后冻结 harness，跑完整闭源 baseline；报告终态质量、失败、调用量和成本，披露数据曝光限制。
+- [x] 接入 minimal-prompt stepwise 回放与评分；核对操作前后状态、标签来源、对象及固定分母，67 项离线测试通过。
+- [x] 核查两条路径的实际请求不混入旧 system/skill、专家标签、理由或历史对话；冻结模型、观测、controller、评测器和数据哈希。
+- [x] 确认 stepwise 与四通道 rollout 的完整执行范围及共享独立 $50 上限；调用量随闭环轨迹变化，不保证预算足够全部完成，不恢复旧批次。
+- [x] 归档两项评测全部完成结果与历史停点，分列条件、指标、调用量和费用；四通道完整闭环已完成。
+- [x] 确认追加预算与外发许可，核验 CH30 已付费前缀、调度及未发送请求后续跑；保持本轮 prompt/controller 不变。
+- [ ] 离线核对专家噪声定义与 KEEP 判断、同输入动作翻转，以及合并前复查 SPLIT 未执行的动作语义；改动须另立版本，不覆盖此次 baseline。
+- [ ] 完成本轮后单独评估合并候选筛选/调度效率；不把省调用的改动混进当前结果。
 - [ ] 后续再研究 student skill-learning、负例补标和可选 SFT。
 
 ### 最新待办：模拟数据线

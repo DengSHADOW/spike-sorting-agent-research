@@ -187,13 +187,13 @@ Recording-block split 已经降低了同一 recording 泄漏，但 CH30 仍来�
 - 当前已建立可复现、无明显 recording overlap 的真实动作评测协议。
 - 未微调 Qwen/Gemma 无法可靠复现专家 `DISCARD`。
 - 在当前 CH30 expert-edit task 上，数值指标与专家 `SPLIT/DISCARD` 高度相关。
-- 当前 numeric-only supervised baseline 显著强于 zero-shot base VLM。
+- 当前 numeric-only supervised baseline 显著强于 未做领域微调的 base VLM。
 
 #### 暂时不能声明
 
 - 不能说 Random Forest 已经完成 spike sorting 或完整 curation。
 - 不能说 93.3% 代表 autonomous agent 成功。
-- 不能说图像无用，因为 numeric model 接受了 831 条监督，而 VLM 仍是 zero-shot。
+- 不能说图像无用，因为 numeric model 接受了 831 条监督，而 VLM 未做领域微调。
 - 不能说模型学会了 `MERGE/NOT_MERGE`，因为没有 merge 负例。
 - 不能说模型知道何时 `KEEP` 或停止，因为当前日志缺少相应人工标签。
 - 不能将当前 action accuracy 与旧 GPT 闭环的 cluster-level F1 直接比较。
@@ -255,7 +255,7 @@ RAG、API-teacher、DPO、RL 和 continual learning 都可以成为后续扩展�
 
 > The previous work established a working multimodal post-curation pipeline and showed that API-based VLMs could operate on real spike-sorting data. My recent work focused on making the study reproducible and trainable: I audited the real datasets, reconstructed 1,374 expert edits, introduced recording-block splits, fixed the action protocol, and benchmarked open VLMs under the same conditions.
 >
-> On the CH30 validation recording, zero-shot open VLMs achieved 6.7% to 54.4% action accuracy and largely failed to reproduce expert discard decisions. In contrast, a supervised Random Forest using four numeric quality features achieved 92.9% on the learned split-versus-discard task. This is a strong result, but it does not mean that the full curation problem is solved. The current logs contain expert edits rather than all possible states, lack reliable KEEP and NOT_MERGE negatives, and use fixed expert states instead of autonomous rollouts. The merge examples are also positive-only.
+> On the CH30 validation recording, open VLMs evaluated on fixed expert states achieved 6.7% to 54.4% action accuracy and largely failed to reproduce expert discard decisions. In contrast, a supervised Random Forest using four numeric quality features achieved 92.9% on the learned split-versus-discard task. This is a strong result, but it does not mean that the full curation problem is solved. The current logs contain expert edits rather than all possible states, lack reliable KEEP and NOT_MERGE negatives, and use fixed expert states instead of autonomous rollouts. The merge examples are also positive-only.
 >
 > The result changes the main research question. Rather than assuming that a VLM is necessary, I now want to test whether diagnostic images provide incremental value beyond a strong numeric baseline under equal supervision. The next experiment is a controlled numeric-only, image-only, and combined LoRA/SFT comparison. Depending on the result, the final system may be a hybrid agent that handles routine cases numerically, uses a VLM for ambiguous morphology, and abstains or requests review for unsafe decisions.
 
@@ -297,4 +297,4 @@ GPT-4.1 and GPT-5.1 agreed on 88/90 predictions. Their actual API versions were 
 
 **Numeric-only baseline:** Random Forest used log spike count, log overcluster count, ISI violation rate, and amplitude CV. Train-only grouped-CV accuracy/macro-F1 was 0.904/0.903. On CH30 SPLIT/DISCARD, it achieved 78/84 = 0.929. DISCARD P/R/F1 was 1.000/0.854/0.921; SPLIT was 0.878/1.000/0.935. All six errors were DISCARD→SPLIT. The reported 84/90 overall includes six positive-only MERGE cases handled by a constant rule; merge generalization remains untested.
 
-The numeric model is supervised while all VLMs are zero-shot, so images have not yet been tested fairly. Next I will train matched Qwen3.5-9B images-only and images-plus-numeric LoRA/SFT models, add KEEP/NOT_MERGE supervision, run a safe rollout with ABSTAIN and reversible DISCARD, then evaluate the frozen model once on the 311-action final test.
+The numeric model is supervised while the VLMs have not undergone task-specific fine-tuning, so images have not yet been tested fairly. Next I will train matched Qwen3.5-9B images-only and images-plus-numeric LoRA/SFT models, add KEEP/NOT_MERGE supervision, run a safe rollout with ABSTAIN and reversible DISCARD, then evaluate the frozen model once on the 311-action final test.

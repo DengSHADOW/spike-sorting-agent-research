@@ -1,0 +1,82 @@
+{
+  "version": "skill-replay-scoring-v2",
+  "status": "prospective_rounds_2_3_only_budget_unset",
+  "parent": {
+    "path": "configs/curation/replay_scoring_v1.json",
+    "sha256": "4547c6c9cea3f34e1a254f3a7796c729ad4ef59010a475d62ca87d16eb69c7fc",
+    "inherit": ["expert", "constraints", "strata"]
+  },
+  "differences_from_v1": [
+    "Majority per case replaces case-repeat counts for future selection; raw repeats remain reported.",
+    "Separate expert-unit DISCARD, terminal-noise KEEP, mixed harm and expert action match; explicit tolerance and stability gates.",
+    "Maximum three rounds including completed historical round 1; ablation then combined-candidate confirmation.",
+    "Campaign-wide budget, frozen observations/skills, correction audit and all-run rescoring.",
+    "No retrospective preregistration claim or overwrite of historical scoring/results."
+  ],
+  "scope": "35 targeted, dependent development cases; diagnostic only, not independent benchmark or statistical equivalence evidence. Historical three-view and four-view expert observations remain stratified.",
+  "original_cases": {
+    "path": "output/curation_skill_preparation_20261006/audit_cases.jsonl",
+    "sha256": "e49123294020a62061e32ddc23cd111f7a555ca47bd34a4d7a897e97d70e78d6",
+    "count": 35,
+    "immutable": true,
+    "additional_cases": "Separate group only, excluded from original-35 winner selection; freeze group IDs and hashes before each round."
+  },
+  "voting": {
+    "planned_repeats": 5,
+    "majority": "strictly more than half of planned repeats",
+    "consistency": "modal count / planned repeats; distinct from v1 pairwise consistency",
+    "minimum_consistency": 0.7,
+    "ties": "Count separately, no substituted action; also report unique plurality without strict majority.",
+    "incomplete_or_unstable": "Keep original denominators and unresolved counts; report observed diagnostics only. Any unresolved original case in either compared version blocks winner selection; no automatic extra repeats.",
+    "unstable_label": "结果不稳定，不据此下结论"
+  },
+  "selection": {
+    "minimum_improvement_cases": 2,
+    "allowed_regression_cases": 1,
+    "metrics": ["pure_expert_discard", "pure_noise_keep", "mixed_harm", "expert_correct"],
+    "winner": "Complete stable pairs only. Candidate wins if either pure_expert_discard or pure_noise_keep decreases by >=2, OR expert_correct increases by >=2; in ALL cases neither pure risk nor mixed_harm may increase by >1, and expert_correct may not decrease by >1. Apply symmetrically to baseline. Otherwise no winner; opposing >=2 effects are a tradeoff, not equivalence.",
+    "tolerance_note": "One case is an operational tolerance, NOT proof of no harm or statistical equivalence; +1/7 expert-unit DISCARD is +14.3 percentage points and must remain visible.",
+    "fallback": "v0 if no eligible reviewed winner",
+    "manual_review": "Numeric eligibility is not final approval. A reviewer must approve regressions before adoption; unreviewed candidates are not fallback winners."
+  },
+  "rounds": {
+    "maximum": 3,
+    "historical_round_1": {
+      "run_dir": "output/curation_skill_replay_20261006_after_topup",
+      "versions": ["v0", "v1"],
+      "repeats": 1,
+      "conclusion": "v1 failed original v1 preregistration; this routes to ablation, not a v2 majority/stability verdict. Any rescoring is retrospective supplementary analysis."
+    },
+    "round_2": {"versions": ["v0", "S1", "S2", "S3", "S4", "S5"], "design": "Each candidate = v0 plus exactly one documented change. Shared newly repeated v0 arm in this round. No new hypotheses mid-round."},
+    "round_3": {"versions": ["v0", "combined"], "design": "Combine only individually eligible and reviewed improvements; freeze their identities and diffs. Compare against a newly repeated v0 arm."},
+    "stop_if_no_single_winner": "Freeze v0; report: 在这批用例上，修改领域规则没有带来改善，下一步应优先检查 controller、画图和数值观测。 Only use this conclusion after complete stable testing, not after budget/error/instability stops.",
+    "fallback_order_if_multiple_reviewed_single_winners": ["S1", "S2", "S3", "S4", "S5"],
+    "fallback_order_note": "Administrative preregistered tie-break, not evidence S1 is superior. If combined is not reviewed/eligible, use first reviewed eligible single candidate; if none use v0."
+  },
+  "budget": {
+    "file": "configs/curation/replay_iteration_budget.json",
+    "scope": "Only future rounds 2 and 3; historical charges and unresolved historical reservation excluded and disclosed separately. Prior authorizations do not carry over.",
+    "start_gate": "User-filled finite positive cumulative cap required. Stop if cumulative settled charges + unresolved reservations + whole-round conservative estimate exceeds cap. An estimate or offline manifest is not inference authorization.",
+    "stop": "No partial round start to use remaining funds; runtime reserve-before-call still required by a separately authorized executor."
+  },
+  "freeze": {
+    "before_round": ["rules_sha256", "case hashes", "skill file hashes", "system", "observations/images/metrics", "model/effort/schema", "code", "repeats", "estimate", "budget"],
+    "after_start": "Reject any changed frozen file. No provider or execution entrypoint is added by this scoring implementation.",
+    "stage45": "New stage4/5 observations are not mixed into this original-35 campaign. Any such experiment is separate."
+  },
+  "corrections": [],
+  "correction_policy": {
+    "required_fields": ["case_id", "field", "before", "after", "reason", "evidence", "reviewer"],
+    "allowed_fields": ["expert_action", "constraint"],
+    "application": "Create a new immutable scoring revision, never mutate audit_cases. Rescore EVERY registered round/version with the same cumulative correction ledger into a new output directory. Keep original reports and responses; never apply only to later versions. The complete campaign inventory, including historical round 1, is required.",
+    "not_allowed": "Changing case membership, images, votes, or standards merely to match a preferred model. Corrected labels do not create independent validation."
+  },
+  "report": {
+    "decision_change_count": "Compare resolved strict-majority actions for each paired case; denominator and unresolved pairs separately listed.",
+    "small_effect_max_changed_cases": 1,
+    "small_effect_label": "skill 改动对决策影响很小",
+    "attribution_categories": ["规则写错", "标准答案有问题", "模型理由没有用到新规则", "证据不足／多因素，待复核"],
+    "default_attribution": "证据不足／多因素，待复核",
+    "attribution_policy": "Include ALL repeat rationales verbatim for both versions. Categories are human hypotheses unless evidence is verified. Omission in a rationale does not prove a rule was unused; disagreement does not prove a wrong label. Never automatically correct labels from model text."
+  }
+}

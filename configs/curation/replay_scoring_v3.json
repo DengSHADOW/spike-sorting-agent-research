@@ -1,0 +1,22 @@
+{
+  "extends": {
+    "path": "configs/curation/replay_scoring_v2.json",
+    "sha256": "4920efdf03b82d39f2ab7c5910d6909a0a0b41b0ff8ad8667c63506b3f71acdb"
+  },
+  "amendment": "2026-10-06 user requested one inference per case/version instead of five. Prospective only; retain v1/v2 and historical reports. No budget, model, effort, output-cap, candidate-count or case-set changes.",
+  "updates": {
+    "version": "skill-replay-scoring-v3-single-pass",
+    "status": "single-pass-exploration-budget-gated",
+    "voting": {
+      "planned_repeats": 1,
+      "majority": "Single observed action, NOT majority evidence",
+      "consistency": "null: repeat consistency cannot be estimated with one observation",
+      "minimum_consistency": null,
+      "incomplete_or_unstable": "Missing responses block selection; no repetition or automatic resend. Stability is not estimated in single-pass mode."
+    },
+    "selection": {
+      "single_pass": true,
+      "interpretation": "Counts may identify an exploratory candidate for manual review only, not repeated stability, significance, generalization or rollout performance. Historical round1 remains supplementary and is not prospectively rescored into a new winner."
+    }
+  }
+}

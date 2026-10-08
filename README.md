@@ -6,24 +6,59 @@ SpikeSorting studies whether VLM-based agents can assist or automate the expert 
 
 The long-term goal is to build a scalable research pipeline for simulated and real extracellular recordings, supporting controlled MEArec-based benchmarking, expert-like action trajectory construction, teacher-student interaction, few-shot adaptation, memory-augmented curation, and future RL / continual learning across heterogeneous lab settings.
 
-## Current priority — 2026-10-06
+## Current results — 2026-10-08
 
-Establish a **closed-model, frozen-domain-skill autonomous curation baseline**.
-Calibrate the domain instructions on development data first, then freeze the
-skill, task contract, model settings, observations, controller and evaluator
-before the full evaluation. SFT and open-model continual learning are later
-work, not prerequisites. Renaming a prompt block to a skill does not improve
-predictions by itself; changing its actual instructions may, and requires
-controlled validation. An offline system/skill request builder, a candidate
-skill v1 and development diagnostics are now implemented; the live runner is
-unchanged, and no new model evaluation or paid run has been performed.
+Establish the **minimal-prompt baseline with both stepwise action evaluation
+and autonomous full-rollout evaluation** documented in
+[`zero-shot baseline/README.md`](<zero-shot baseline/README.md>).
+Its prompts contain only the task, observation descriptions, action semantics
+and output format: no domain skill, demonstrations, expert comments or feedback.
+The joint stepwise/rollout entrypoint is implemented; all 295 reference
+pre/post-state hashes match, and 294 eligible requests/images passed preflight.
+**Both evaluations are now complete; the process exited normally.** Stepwise:
+**102/294 correct (34.69%)**. The final CH30 continuation added 529 successful
+requests without re-billing its 1,060 saved responses; the other results are unchanged.
+99 related offline tests passed before continuation.
+
+| Channel | Stepwise correct / eligible | Rollout decisions | Precision | Recall | F1 | Initial F1 |
+|---|---:|---:|---:|---:|---:|---:|
+| CH31 | 14/54 | 535 | 0.3870 | 1.0000 | 0.5581 | 0.5048 |
+| CH3 | 37/97 | 369 | 0.1995 | 1.0000 | 0.3327 | 0.2440 |
+| CH20 | 19/53 | 260 | 0.2205 | 1.0000 | 0.3613 | 0.3597 |
+| CH30 | 32/90 | 1,589 | 0.1946 | 0.8742 | 0.3183 | 0.3061 |
+
+Mean channel F1: **0.3926**, versus **0.3536** without curation. The main observed
+failure is retained reference noise, not deleted expert spikes (zero in all four).
+CH30 retains all expert spikes, but 11,461 remain mixed with another expert unit
+and do not receive correct matches. These exposed development results are not SOTA.
+Standard-price estimates: **$10.425039 stepwise / $94.284763 rollout**.
+Conservative accounting: **$12.0844315 / $107.866573**, total **$119.9510045**
+under the authorized cumulative **$150** cap, including the unresolved **$0.2441875**
+HTTP 503 reservation. These are estimates, not invoices. No further inference is running.
+See the [combined report](<zero-shot baseline/results/minimal_astra_high_dual_20261007_resume150/REPORT.md>).
+Both evaluations use the same prompts
+and model/observation settings. Report action agreement on reconstructed expert
+pre-action states separately from terminal clustering P/R/F1 in the same report;
+never align step numbers after autonomous trajectories diverge. The independently
+original $50 cap covered both evaluations together, not $50 each; the extended
+$100 and then $150 caps also covered all original and continuation costs together.
+Execution order was 294 eligible expert-state decisions, then CH31/CH3/CH20/CH30 rollouts;
+errors or insufficient remaining budget stopped execution, without automatic retries.
+CH20's `s 0` recovery operation is excluded from prediction scoring before any
+inference, but replayed locally to reconstruct subsequent reference states.
+In this repository, the zero-shot baseline label is reserved for that new
+experiment. Older runs are described by their actual conditions: detailed-rule
+rollouts, fixed-state action evaluations, or skill/image comparisons. Their
+results do not establish the new baseline. SFT and skill optimization are not
+prerequisites for it; model, observations, controller and evaluator must still
+be frozen and disclosed before execution.
 
 The completed legacy Astra/high runs scored F1 **0.3339 on CH30** and **0 on
 CH31**; CH3 stopped after 84 accepted decisions and CH20 did not start. These
 are retained old-protocol results, not a complete four-channel baseline or
 evidence that the source MAT files are invalid. CH3/20 used a protected
 controller, unlike CH30/31. Repeatedly inspected channels must not be presented
-as untouched final-test data. See Section 15 of
+as untouched final-test data. See the latest scope correction in
 [`项目方法与实验状态.md`](项目方法与实验状态.md) for the current protocol boundaries;
 dated historical plans below do not override this priority.
 
@@ -259,7 +294,7 @@ ground-truth curation pass.
 
 All VLM rows use the same 90 fixed states and strict action-only outputs. The
 supervised Random Forest was trained on 831 split-stage actions from three
-non-overlapping recording blocks, so its advantage over zero-shot VLMs does
+non-overlapping recording blocks, so its advantage over VLMs without task-specific fine-tuning does
 not establish that images are unnecessary. A fair image-value test still
 requires supervised numeric-only, images-only, and combined models trained on
 the same blocks. The six `MERGE` labels are positive-only; no current result
@@ -270,7 +305,7 @@ demonstrates rejection of an incorrect merge.
 All four channels were rerun from their initial assignments with JianZhi's
 shared cautious source prompt, exact model snapshot `gpt-5.1-2025-11-13`,
 reasoning effort `medium`, and no total call cap. This is the skill-rich
-zero-shot expert harness; actions were executed and changed later states.
+detailed-rule-prompt harness; actions were executed and changed later states.
 
 | Channel | API calls | Final units | Precision | Recall | F1 | Exact historical assignment |
 |---|---:|---:|---:|---:|---:|---:|
