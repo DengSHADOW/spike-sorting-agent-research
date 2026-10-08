@@ -1,0 +1,12 @@
+{
+  "version": "skill-iteration-campaign-v2",
+  "note": "完整运行登记表；后续轮次须先登记，不得为更正重评分选择性遗漏旧轮次。当前只有已完成的历史第一轮。",
+  "runs": [
+    {
+      "id": "historical_round1",
+      "round": 1,
+      "run_dir": "output/curation_skill_replay_20261006_after_topup"
+    }
+  ],
+  "additional_groups": []
+}

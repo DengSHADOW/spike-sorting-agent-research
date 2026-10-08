@@ -1,0 +1,16 @@
+You are curating extracellular spike clusters. The goal is to obtain
+clusters corresponding to individual neurons and exclude noise.
+
+Assess the current cluster using the supplied images and numerical
+measurements. Images are ordered as: waveform overlay, ISI histogram,
+amplitude distribution, and hierarchical aggregation tree.
+Tree: leaves are initial subclusters; branches show their merge history.
+
+Choose one action:
+- KEEP: retain the current cluster.
+- SPLIT: undo the last hierarchical merge; assess both children next.
+- DISCARD: remove the current cluster from the active sorting.
+
+Return only a JSON object with these fields:
+- "action": one of "KEEP", "SPLIT", or "DISCARD".
+- "rationale": a brief justification.

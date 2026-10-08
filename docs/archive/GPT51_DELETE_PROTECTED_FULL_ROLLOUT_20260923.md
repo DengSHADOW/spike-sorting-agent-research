@@ -4,7 +4,7 @@
 
 ## Question and protocol
 
-This experiment tests whether JianZhi's shared cautious zero-shot prompt can
+This experiment tests whether JianZhi's shared cautious domain-rule prompt can
 avoid catastrophic empty outputs when destructive actions are made
 recoverable. It is a full autonomous rollout: every prediction changes the
 cluster state seen by later calls. It is not the CH30 fixed-state action test

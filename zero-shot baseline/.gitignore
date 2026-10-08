@@ -1,0 +1,11 @@
+# Detailed experimental artifacts stay local; track prompts and summary reports only.
+/runs/
+.env
+.env.*
+*.pem
+*.key
+authorize*.json
+*.png
+*.jpg
+*.jpeg
+*.pdf

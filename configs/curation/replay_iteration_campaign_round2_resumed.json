@@ -1,0 +1,9 @@
+{
+  "version": "skill-iteration-campaign-round2-manual-resume",
+  "note": "One round with original168 responses plus42 manually authorized remaining requests. The response-free HTTP500 attempt is not a model prediction; its reservation remains in accounting. No extra repeats or third round.",
+  "runs": [
+    {"id": "historical_round1", "round": 1, "run_dir": "output/curation_skill_replay_20261006_after_topup"},
+    {"id": "single_pass_round2", "round": 2, "run_dir": "output/curation_skill_round2_budget55_20261006", "continuation_dirs": ["output/curation_skill_round2_resume1_20261006"]}
+  ],
+  "additional_groups": []
+}

@@ -153,7 +153,7 @@ Rationale 不是人工 ground truth，也不应作为正式 CoT 证据，但可�
 - 当前也不应直接用 CH30 反复调 prompt/阈值后汇报同一 CH30 成绩，否则会把 validation 变成 training。
 - 该结果支持继续研究本地 student，但不能单独证明必须 SFT；必须先确认 numeric-only baseline 和图像增益。
 - SFT 的主要目标应是学习“可挽救复合 cluster 与不可挽救噪声”的边界，而不是只提高总体 accuracy。
-- 论文中应把该结果作为 zero-shot base VLM baseline/失败分析；项目贡献应落在无泄漏监督、视觉增益、sequential safety 和终态质量，而不是“调用 VLM 即可 curation”。
+- 论文中应把该结果作为 base VLM fixed-state action baseline/失败分析；项目贡献应落在无泄漏监督、视觉增益、sequential safety 和终态质量，而不是“调用 VLM 即可 curation”。
 
 ### 9. 接下来的固定顺序
 
@@ -210,7 +210,7 @@ Rationale 不是人工 ground truth，也不应作为正式 CoT 证据，但可�
 
 ### 5. 对项目方向的影响
 
-- 已经完成足够的 base-model 横向检查，不需要继续无目的扩大 zero-shot 模型列表。
+- 已经完成足够的 base-model 横向检查，不需要继续无目的扩大 未做领域微调的模型列表。
 - Qwen3.5-9B 可作为第一版 LoRA/SFT 的主候选；Gemma-4-E4B-it 保留为跨架构复核。选择依据不是 Gemma 高 4 个正确样本，而是 Qwen 9B 容量、现有 Qwen 工具链和后续同-backbone base/SFT 对照的一致性。
 - SFT 前仍需完成 train-recording-only numeric baseline，并补齐或明确派生 KEEP/NOT_MERGE。前者检验模型是否只是读取数值 shortcut，后者避免只拿“实际执行的正向编辑”训练一个无法停止或拒绝候选的策略。
 - 第一版 SFT 继续采用 action-only target；现有 train blocks 没有可靠人工 rationale，不应生成伪推理监督。
@@ -284,7 +284,7 @@ HistGradientBoosting 在 CH30 多对 1 条，但 train-only grouped CV 略低，
 | Gemma-4-E4B-it base VLM | 否 | 0.544 | 0 |
 | Random Forest numeric-only | 是，831 条 split-stage | 0.933 | 0.854 |
 
-该差距证明当前专家动作与数值指标高度相关，也说明未经领域训练的 base VLM 不是合格策略。但它**不能**单独证明图像无用：numeric model 已经看过 831 条监督标签，而 base VLM 是 zero-shot。公平的增量问题应比较使用相同 train blocks 训练的 numeric-only、images-only 和 images+numeric 模型。
+该差距证明当前专家动作与数值指标高度相关，也说明未经领域训练的 base VLM 不是合格策略。但它**不能**单独证明图像无用：numeric model 已经看过 831 条监督标签，而 base VLM 未做领域微调。公平的增量问题应比较使用相同 train blocks 训练的 numeric-only、images-only 和 images+numeric 模型。
 
 ### 5. 特征与风险
 
@@ -295,7 +295,7 @@ RF impurity importance 为：`n_spikes` 0.601、`n_overclusters` 0.241、ISI 0.1
 - 专家本来就主要依据 cluster 大小、overcluster 数和质量指标做 SPLIT/DISCARD；
 - 数据生成和动作日志使这些指标泄漏了候选构造规则，模型学到 lab/dataset shortcut。
 
-因此当前可以声明“numeric supervision 在未见 CH30 recording 上强于 zero-shot base VLM”，不能声明 SOTA、不能跳过图像消融，也不能据此进入 autonomous rollout。
+因此当前可以声明“numeric supervision 在未见 CH30 recording 上强于 未做领域微调的 base VLM”，不能声明 SOTA、不能跳过图像消融，也不能据此进入 autonomous rollout。
 
 ### 6. 产物
 

@@ -1,0 +1,15 @@
+{
+  "version": "single-rule-ablation-v1",
+  "base_sha256": "26ea8b22039ef10a8923b251c0ec3f1793ee852fa4104318d40ced1bcd8d4b58",
+  "candidate_source_sha256": "0a82554da06a7d911a5a3c7db7210f2a36ee7db537bbf3c58ede3e18390b0aee",
+  "construction": "Each arm preserves the entire v0 text and appends only the selected numbered v1 paragraphs, verbatim. The skill-level amendment has precedence only for its stated topic. This tests the topic bundle, not each sentence or a literal partition/reconstruction of v1. No new domain hypotheses. Unaffected phases are exactly v0.",
+  "amendment_prefix": "\n\n## Domain rule amendment\nFor the topic below, this amendment takes precedence over conflicting domain rules above; all other domain rules remain unchanged.\n",
+  "versions": {
+    "S1": {"topic": "evidence for splitting", "phase1": [1, 2], "phase2": []},
+    "S2": {"topic": "morphology and evidence for noise", "phase1": [3, 4], "phase2": [1]},
+    "S3": {"topic": "ISI units and uncertainty", "phase1": [6], "phase2": [4]},
+    "S4": {"topic": "source validity versus pair compatibility", "phase1": [], "phase2": [1, 2, 3, 5]},
+    "S5": {"topic": "counts are not labels; no unsupported temporal drift", "phase1": [5, 7], "phase2": []}
+  },
+  "overlap_note": "S2 and S4 intentionally share the source-validity paragraph; its concepts span both topics. Effects are not orthogonal or additive; no claim of independent causal factors. No individually unchanged phase is counted as evidence for a rule effect."
+}

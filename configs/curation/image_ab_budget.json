@@ -1,0 +1,6 @@
+{
+  "cumulative_budget_usd": 25,
+  "scope": "image_ab_only_separate_from_skill_iterations_and_full_rollout",
+  "status": "single_pass_protocol_recorded_preparation_and_estimate_pending",
+  "note": "2026-10-06 用户指定图像验证$25，随后要求每例每版本只跑一次。独立额度，不与skill预算互相挪用；不视为完整rollout预算。单次设计见 image_ab_protocol_v1.json；图片配对准备、输入计数和整轮预算验证尚未完成，没有据此发送请求。"
+}

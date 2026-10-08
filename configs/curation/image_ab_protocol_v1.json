@@ -1,0 +1,21 @@
+{
+  "version": "image-ab-single-pass-v1",
+  "scope": "Original 35 development case identities; fresh image experiment separate from skill iteration campaign and rollout.",
+  "case_file": "output/curation_skill_preparation_20261006/audit_cases.jsonl",
+  "case_sha256": "e49123294020a62061e32ddc23cd111f7a555ca47bd34a4d7a897e97d70e78d6",
+  "skill": "v0",
+  "model": "gpt-6-astra",
+  "reasoning_effort": "high",
+  "max_output_tokens": 4000,
+  "repeats": 1,
+  "seed": 20261006,
+  "arms": {"raw": "raw_member_v1", "summary": "summary_member_v1"},
+  "changed": "Waveform PNG only: full-cluster median/10-90% band, plus shared pair y-limits in phase2. Both arms use identical deterministic member sampling, source waveforms and corrected numeric observations.",
+  "unchanged": "Same exact state, skill, system, numeric observations, image order/count, model parameters, and original non-waveform PNGs. Legacy phase1 stays three-view; expert phase1 stays four-view; phase2 stays three-view. Neither original images nor audit cases are overwritten.",
+  "state_gate": "Expert states must match recorded pre-action assigns hash; historical states must match NPZ and MAT hashes. Stop on any mismatch. No reserved/quarantined data.",
+  "scoring": "Same action match and three harm-constraint definitions as replay_scoring_v1.json; raw/summary reported separately by target, phase and image layout; exact paired changes and original rationales. No repeat consistency or significance claim. New images require fresh calls in both arms; no comparison to old paid responses as if inputs were equal.",
+  "decision": "Report descriptive paired differences only; no automatic deployment or winner adoption. The combined summary/axis intervention is not separately attributable to its components.",
+  "budget_file": "configs/curation/image_ab_budget.json",
+  "stop": "Whole-round conservative estimate must fit $25 cap; per-request reserve; zero retries; stop on provider error, refusal, truncation or parse failure. No implicit rollout budget.",
+  "disclaimer": "Tests incremental value of these plot changes, NOT whether VLM/images are necessary versus numeric-only and NOT complete closed-loop performance."
+}

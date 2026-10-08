@@ -9,7 +9,7 @@
 - Model: `gpt-5.1-2025-11-13`, OpenAI Responses API, reasoning effort
   `medium`, temperature `0`.
 - Prompt: JianZhi's shared cautious Phase 1/2 source prompt from upstream
-  commit `03f68e5`; this is the skill-rich zero-shot expert harness, not the
+  commit `03f68e5`; this is the detailed-rule-prompt harness, not the
   student/SFT harness.
 - Legacy controller thresholds retained: Phase 0 `<500`, small/large split at
   `4,000`, final discard `<5,000` spikes.
