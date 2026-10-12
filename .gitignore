@@ -53,9 +53,13 @@ Jacob Bedke-Annotated_spike_sorting_data_w_chronux/
 /Resume/
 简历项目素材.md
 项目技能总结.md
+*简历*
 
 output/
 *output/
+
+# Curated report Markdown may be shared; structured results stay local.
+/zero-shot baseline/results/**/*.json
 
 # MEArec scratch file emitted in the working directory
 tmp_params_path.yaml

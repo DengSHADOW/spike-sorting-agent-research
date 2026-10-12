@@ -1,0 +1,14 @@
+{
+  "version": "shared-spike-id-one-to-one-v1",
+  "identity": "Rows of the same MAT, not timestamp-based event matching",
+  "noise_label": 0,
+  "matching": "Hungarian maximum summed IoU; edges below threshold are zeroed BEFORE optimization; only eligible assigned edges count",
+  "minimum_iou_inclusive": 0.5,
+  "true_positives": "Sum of intersections of eligible one-to-one matched pairs",
+  "false_positives": "All predicted nonzero spikes minus true positives (including unmatched clusters)",
+  "false_negatives": "All reference nonzero spikes minus true positives",
+  "expert_unit_macro": "All reference units, unmatched units score zero; matched-only averages must be labeled separately",
+  "pure_reference_noise_cluster": "Predicted nonzero cluster with zero overlap with any reference nonzero unit",
+  "empty_denominator": "Return 0, not NaN, and retain counts",
+  "scope": "Curation against expert labels; not a claim of biological ground truth or a full SpikeInterface timing benchmark"
+}

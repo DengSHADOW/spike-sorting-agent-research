@@ -6,7 +6,41 @@ SpikeSorting studies whether VLM-based agents can assist or automate the expert 
 
 The long-term goal is to build a scalable research pipeline for simulated and real extracellular recordings, supporting controlled MEArec-based benchmarking, expert-like action trajectory construction, teacher-student interaction, few-shot adaptation, memory-augmented curation, and future RL / continual learning across heterogeneous lab settings.
 
-## Current results — 2026-10-08
+## Latest baseline review and optimization routes — 2026-10-12
+
+Claude Opus 5.5/high completed **294 stepwise decisions and all four autonomous
+rollouts** using the same minimal prompts and observations as Astra. Stepwise
+agreement is **155/294 (52.72%)**, versus Astra's **102/294 (34.69%)**.
+Under the same full-output one-to-one scoring, mean channel F1 is **0.4442 vs
+0.3229**. However, Claude discarded **58,141 expert-labelled spikes** on
+CH20/CH30; higher mean F1 does not establish safer curation. See the
+[verified comparison and limitations](<zero-shot baseline/README.md#8-claude-baseline-复核2026-10-12>)
+and [Claude report](<zero-shot baseline/results/minimal_opus55_high_dual_20261012_v3_full/REPORT.md>).
+These are exposed development channels, not an untouched test set.
+
+The following are **candidate routes, not implemented or validated improvements
+in this project**. Preserve the minimal-prompt baseline; evaluate changes as
+separate harness experiments without weight training.
+
+| Route | Relevant source | Proposed use and boundary |
+|---|---|---|
+| Bounded reasoning | [vLLM thinking budget](https://docs.vllm.ai/en/latest/features/reasoning_outputs/#thinking-budget-control) | Test an explicit reasoning budget while leaving room for the final JSON. First verify Qwen3.5 multi-image/schema compatibility; does not guarantee a correct action. |
+| Adaptive early exit | [DEER paper](https://arxiv.org/abs/2504.15895), [code](https://github.com/iie-ycx/DEER) | Explore confidence-based early termination after fixed-budget controls. Published results do not establish reliability on these spike images; confidence is not ground truth. |
+| Offline skill optimization | [GEPA paper](https://arxiv.org/abs/2507.19457), [code](https://github.com/gepa-ai/gepa) | Use traces and dependable feedback to propose/evaluate skill-only edits. Our experiment must enforce frozen system prompt, action definitions, controller and scorer; GEPA does not impose that boundary automatically. |
+| Continual skill/playbook updates | [ACE paper](https://arxiv.org/abs/2510.04618), [code](https://github.com/ace-agent/ace) | Consider incremental, versioned experience updates after offline validation. Successful action execution is not evidence of scientifically correct curation. |
+| Optimization infrastructure | [Airbnb Agent Harness Optimizer](https://github.com/airbnb/agent-harness-optimizer) | Reference its optimization/evaluation workflow. Its broader prompt/code mutation scope is not authorization to modify our controller or evaluator. |
+
+Suggested order: stabilize inference → bounded GEPA-style skill optimization →
+ACE-style continual updates. Track truncation, latency, tokens/cost **and**
+stepwise agreement, full-rollout scores, retained noise and lost expert spikes.
+Use recording-level development/evaluation separation; never tune against the
+final held-out set. No new optimization experiment is authorized by this roadmap.
+
+## Astra historical results — 2026-10-08
+
+The table below preserves the original **many-to-one** report. For current
+cross-model comparisons, use the [one-to-one rescoring](<zero-shot baseline/results/minimal_astra_high_dual_20261007_resume150/terminal_scores_20261012/TERMINAL_SCORES.md>);
+the two metric definitions must not be mixed.
 
 Establish the **minimal-prompt baseline with both stepwise action evaluation
 and autonomous full-rollout evaluation** documented in
@@ -34,7 +68,7 @@ and do not receive correct matches. These exposed development results are not SO
 Standard-price estimates: **$10.425039 stepwise / $94.284763 rollout**.
 Conservative accounting: **$12.0844315 / $107.866573**, total **$119.9510045**
 under the authorized cumulative **$150** cap, including the unresolved **$0.2441875**
-HTTP 503 reservation. These are estimates, not invoices. No further inference is running.
+HTTP 503 reservation. These are estimates, not invoices. This Astra campaign has finished.
 See the [combined report](<zero-shot baseline/results/minimal_astra_high_dual_20261007_resume150/REPORT.md>).
 Both evaluations use the same prompts
 and model/observation settings. Report action agreement on reconstructed expert
@@ -72,7 +106,7 @@ dated historical plans below do not override this priority.
 
 Detailed dated reports are in `docs/archive/`; four fixed-state reports and two
 progress updates have been consolidated there. Archived recommendations are
-not current instructions. Resume material remains separate from research records.
+not current instructions.
 
 ## Upstream reference
 

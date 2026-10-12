@@ -2,6 +2,8 @@
 
 实验日期：2026-10-07 至 2026-10-08。四通道 stepwise 与完整闭环均已完成。
 
+以上完成状态及第 1–6 节结果仅指 Astra 历史实验。**2026-10-12 Qwen3.5-9B／27B 实验已启动，尚未全量完成**，计划和执行记录见第 7 节；Claude 四通道已完成，复核见第 8 节。后续优化候选路线见[主 README](../README.md#latest-baseline-review-and-optimization-routes--2026-10-12)，尚未实施，不覆盖历史记录。
+
 ## 1. 实验条件
 
 模型：`gpt-6-astra`；reasoning：`high`；每次输出上限 4000 tokens；标准服务层。每项评测运行一次，无多次取优。所有通道共用相同的 [Phase 1 prompt](prompts/phase1.txt) 和 [Phase 2 prompt](prompts/phase2.txt)，输出 `action` 与简短 `rationale`。
@@ -14,7 +16,7 @@ Stepwise 测“给定专家操作前状态，动作是否与专家一致”；fu
 
 ### Full rollout：最终分群结果
 
-四通道均完成完整闭环。以下比较最终 spike 分配与专家 MAT 终态，**不是每一步动作的 accuracy**。
+四通道均完成完整闭环。以下保留历史 **many-to-one** 口径，比较最终 spike 分配与专家 MAT 终态，**不是每一步动作的 accuracy**。跨模型比较使用第 8 节的一对一重算，不混用两种分数。
 
 | 通道 | Precision | Recall | 最终 F1 | 初态 F1 |
 |---|---:|---:|---:|---:|
@@ -114,3 +116,202 @@ MAT 已包含检测出的 spike 波形、时间、初始分群和聚合树。本
 闭环含 2,753 次成功判断及 1 次 HTTP503；保守账本含 $0.2441875 未结算预留。金额为估算，不是官方账单。
 
 结果：[完整 score.json（本地）](runs/minimal_astra_high_dual_20261007_resume150/score.json)、[汇总报告](results/minimal_astra_high_dual_20261007_resume150/REPORT.md)。代码：[运行器](../scripts/run/run_minimal_prompt_baseline.py)、[观测生成](../src/agent/curation_observation_v1.py)、[stepwise](../scripts/analysis/minimal_stepwise.py)、[controller](../src/pipeline/curation_engineering_v1.py)、[终态评分](../src/eval/metrics.py)。原始数据和运行文件不随本文上传。
+
+## 7. Qwen 双模型实验计划与执行记录（2026-10-12，未完成）
+
+### 实验范围与“全量”定义
+
+目标：在固定 minimal-prompt curation 流程中建立两个未做本项目微调的 VLM 起点，分别测专家动作一致性和自主闭环终态质量。拟通过 OpenRouter 调用 `qwen/qwen3.5-9b` 与 `qwen/qwen3.5-27b`，对应 Qwen3.5-9B／27B。
+
+| 通道 | 完整 dataset ID | 每模型 stepwise 样本 | 每模型 full rollout |
+|---|---|---:|---:|
+| CH3 | `cM2-e004_004-006_CH3` | 97 | 1 次，从初态到终态 |
+| CH20 | `cM2-e004_011-015_CH20` | 53 | 1 次，从初态到终态 |
+| CH30 | `cM2-e008_021-028_CH30` | 90 | 1 次，从初态到终态 |
+| CH31 | `cM2-e004_004-006_CH31` | 54 | 1 次，从初态到终态 |
+| 每模型合计 | 4 通道 | 294 | 4 次 |
+| 两模型合计 | 8 个模型×通道组合 | **588 个预测** | **8 次完整闭环** |
+
+- 每项只跑 **1 次**，不多次取优；两模型的两项评测、四通道全部完成才叫“本轮全量完成”。全量不指全部 17 个数据集或约 26 GB 数据包；CH5、其他通道、模拟数据、reserved/quarantined blocks 均不纳入。
+- Stepwise 沿用既有审计的 295 条日志：CH20 第 5 步 `s 0` 只用于本地重建后续专家状态，超出模型接口，预先排除评分，固定分母 294。共 DISCARD 158、SPLIT 126、MERGE 10；不补造 KEEP/NOT_MERGE。运行前复核来源和数量，变化则停；不因模型答错或解析失败删样本。
+- **8 次 rollout 不等于 8 次 API 调用。** 每个闭环包含实际发生的全部 Phase 1、候选复查和 Phase 2 判断；次数随模型轨迹变化，不能按专家日志长度估计。历史 Astra 的 2,753 次成功判断不是 Qwen 调用量或费用保证。
+
+### 模型输入与冻结条件
+
+- 复用本目录两份 minimal prompt、`raw_member_v1` 观测、既有 MAT/初始分群；Phase 1 四图、Phase 2 三图，附数值及计算定义，输出 `action` + 简短 `rationale`。不重新做原始电信号检测/初始聚类，不修改 MAT。
+- 不输入专家评论/理由、专家答案/终态、旧模型响应、few-shot、领域 skill、RAG 或 teacher 反馈。Stepwise 用专家轨迹重建输入状态但不显示答案；rollout 不用专家动作纠偏。
+- 初稿拟关闭 thinking；后续讨论改为建议两模型均开启 thinking、输出上限 4000 tokens（包括 reasoning）。这是待 smoke 验证并冻结的设置，不是已完成实验条件；不能把 Qwen 的开关等同于 Astra 的 `high`，也不能把隐藏 reasoning 文本当作关闭 thinking。
+- 优先选择两者均可验证的 BF16 端点，固定各自提供商，禁用 provider/model 自动 fallback。记录服务端可见版本、精度、参数/图像支持和价格；拿不到权重 revision 就写“提供商未公开”，不冒用 Hugging Face 哈希。若精度、schema、thinking 无法同时满足，先报告，不暗换 FP8 或弱化协议。
+- 不顺手改 controller、画图、4000 调度门槛或添加通道专属删除保护；旧 500/5000 自动删除仍关闭。沿用第 4 节时须披露**候选复查 SPLIT 未执行**的已知问题；若决定修复，先独立版本化和离线验证再冻结，不能把与旧 Astra 的差异全归因于模型。此项仍为付费前核查关口，不写成已修复。
+- 新模型各建独立运行目录，记录代码/配置/数据/输入哈希、完整响应、状态及费用；不覆盖历史 output、prompt 或 Astra 结果。
+
+### 判断标准
+
+1. **Stepwise：** 给定专家操作前状态、phase 和 source/target，动作完全相同算正确，预测不推进下一样本。报告每通道及合计 accuracy、逐类 P/R/F1、混淆矩阵、解析/拒答/截断和完成率。保留失败/缺失记录；未完成批次不冒充全量成绩。不评价没有标签的 KEEP/NOT_MERGE 或自主选对象能力。
+2. **Full rollout：** 每次从该 MAT 的 `hierarchy.assigns` 独立开始，不从 stepwise 专家终态续跑；模型实际操作至正常终止，再与 `curation.assigns` 比较。预算、接口错误或安全上限停止均为未完成，检查点不是正式终态。
+3. **一对一主评分（2026-10-12 已实现核心并离线测试，待接入全量收集）：** 用同一 MAT 的 spike 行号构造重叠矩阵，IoU 为权重，门槛 `IoU >= 0.5`；先将不合格边置零，再用 Hungarian 最大总权重匹配，只保留合格配对，每群至多匹配一次。这是共享 spike ID 的比较，不宣称已运行带时间容差的完整 SpikeInterface 比较。
+   - **全输出口径：** TP＝合格匹配对重叠总数，FP＝全部预测非零 spikes−TP，FN＝全部专家非零 spikes−TP；报告 P/R/F1，未匹配预测群不能从分母消失。
+   - **Unit 口径：** 列每个专家 unit 的匹配、IoU（unit accuracy）、P/R/F1；未匹配专家 unit 的评分记 0，最佳候选 IoU 另列。报告匹配数/专家 unit 总数及全部专家 unit 宏平均；仅配上者平均只能作明确标注的补充。
+   - 同时报告初态/终态变化、最终群数、未匹配预测群数、纯参考噪声群数、误保留噪声 spikes、误删专家 spikes。“未匹配群”不等于“纯噪声群”；不使用专家答案事后删噪声再报高分。
+4. 保留第 2 节历史 many-to-one 结果，不能直接与新一对一分数比较。可**离线重算**已有 Astra 初态/终态作同口径参照，不新增 Astra 推理；同口径仍不消除 thinking、模型和服务端差异。Stepwise 与 rollout 不合成一个 accuracy。
+
+四通道已有开发曝光，不是 untouched held-out；CH3/CH31 还共享同一文件名 recording block，不能称四份已确认独立录音。后续 harness 泛化需另设录音级隔离评测。
+
+### 执行步骤、费用与排除项
+
+| 顺序 | 工作 | 是否推理付费 |
+|---|---|---|
+| 1 | 离线适配现有 Astra 专用运行器；验证四通道/294 状态、答案隔离、图片/schema、零重试、预算停止及恢复；实现并测试一对一评分，核查 controller，冻结 manifest | 否 |
+| 2 | 真实图片 smoke：每模型 1 个 Phase 1 + 1 个 Phase 2，共 4 次；分别取 CH31 的首个 Phase 1、CH20 的首个合格 Phase 2 样本（CH31 无 Phase 2 标签），验证多图、thinking、解析、usage、耗时和费用 | 是，计入本轮 $25 |
+| 3 | 全量 stepwise：9B、27B 各预测全部 294 状态一次，共 588 次，不因成绩临时改 prompt | 是 |
+| 4 | 全量 rollout：依次 9B→27B，每模型按 CH31→CH3→CH20→CH30 独立完成四通道，共 8 次闭环；沿用历史顺序，不按成绩挑通道 | 是，调用量随轨迹变化 |
+| 5 | 离线核验正常终态、请求/状态哈希和账本；汇总双模型 stepwise/终态/失败案例/延迟/费用，以及旧 Astra 同口径参照和条件差异 | 否 |
+
+- Smoke 单独记账，不作性能结论，也不抵扣正式样本。本计划已知固定请求数为 **4 + 588 = 592**，另加 8 次 rollout 的实际判断请求；错误请求单列，不静默重发。
+- 按模型分别记录 `smoke / stepwise / rollout` 费用、input/output/reasoning/cached tokens、实际提供商和费用来源。估算与实际返回费用/账单分开，未知消费不记成已确认的零。
+- **用户已确认本轮独立总预算 $25，不继承旧 $150 或其他任务额度。** 当前指令仅验证接入，不启动全量实验。每次推理前预留费用；接口/截断/解析/预算异常停止并通知，保留可核验断点，不回退 mock、不暗换模型；完成也通知。
+- 不包含 SFT/QLoRA/RL、thinking A/B、新 skill 调优、图像消融、其他模型或其他数据；这些必须独立立项，不混入“全量”。
+
+**首次接入检查（2026-10-12，历史状态）：账户鉴权通过，当时图片推理未执行；后续 smoke 结果见本节末尾。**
+
+- 已修复 `.env` 中密钥仅存在于注释、未配置 `OPENROUTER_API_KEY` 的问题；未显示密钥，`.env` 被 Git 忽略且未跟踪。
+- 官方只读 `/key`、`/credits` 均返回 HTTP 200；总充值 $25、已用 $0。密钥未设独立额度限制，不能用它代替本地预算保护。
+- 9B：`deepinfra/bf16` 声明支持图像模型的 `structured_outputs`、`response_format` 和 reasoning；尚未实测图片响应。
+- 27B：当前唯一列出的 BF16 端点为 `novita/bf16`，列出 `response_format` 和 reasoning，但未列出 `structured_outputs`。[Novita 模型页](https://novita.ai/models-console/model-detail/qwen-qwen3.5-27b)声称支持 Structured Output；与 OpenRouter 能力目录不一致，不能据此确认严格 JSON schema 兼容。依据 [OpenRouter 说明](https://openrouter.ai/docs/guides/features/structured-outputs)，须按具体端点核查，不能只看模型名称。
+- 因上述兼容性待确认，停止在付费 smoke 之前；**推理请求 0、推理费用 $0**，没有改为 FP8、放宽 schema 或启用 fallback。完整运行器/评分验证尚未全部实现；账户接入成功不等于双模型实验就绪。
+
+### 2026-10-12 后续实施：先 baseline，再优化 harness
+
+- 用户确认顺序：先完成两个模型的 minimal-prompt stepwise + rollout；之后另立 harness 优化版本，冻结后让两个模型使用同一版复测。当前 $25 只属于 baseline（含 smoke），不自动授权后续优化实验。
+- 已有 harness：两阶段调度、观测/画图、动作执行、状态检查点、预算与解析保护；已完成过 Astra minimal 四通道。system/skill 分离及 v0/v1、S1–S5、画法 A/B 已实施，但没有稳定改善证据，保留 v0。**这些领域 skill 不加载到当前 minimal baseline。**
+- 未完成：Qwen 双模型 live 接入及全量运行器/恢复测试；一对一评分接入结果收集；自动反馈→更新 skill→验证→接受/回退的端到端学习循环。工具自由调度、SFT/RL 不作为本轮已完成内容。
+- 先保存 baseline，后续仅在开发数据调 skill；冻结 system/动作接口和优化边界。若需修 controller，独立版本化并在相同修复版上保留 minimal 对照，不能把 controller 与 skill 联合改变的收益全归因于 skill。四通道均已曝光，复测是开发集结果；泛化另需未参与优化的 recording。
+- 新入口：`scripts/run/run_openrouter_smoke.py`，默认离线；每模型使用 CH31 step 1（四图）和 CH20 step 37（Phase 2 三图）。复用已冻结 prompt/数值/PNG，逐张验哈希，不打开专家答案文件。仅 API 封装改变；BF16、thinking=true、max_tokens=4000、严格 schema、无重试/fallback；采样参数使用提供商默认，不能声称与 Astra 完全相同。
+- dry-run：`zero-shot baseline/runs/openrouter_smoke_dry_20261012_v1/`，4 份请求均已校验；manifest SHA256 `ac9cc852067161cf985ecdefc15164fa501fd6a61e444830fbb9afba9c2ec35d`。不保存 base64 到请求记录。
+- smoke 费用上限 $0.50，包含在 $25 内；每次按端点整个上下文容量加 4000 输出上限保守预留，按返回 cost 结算。失败且未知收费时保留预留，不记成免费；无自动续跑。
+- 评分核心：`scripts/analysis/curation_one_to_one.py`；预注册规则：`configs/curation/one_to_one_scoring_v1.json`，SHA256 `dc4085582f1e92846afe63405e80beee12b568837bbe98f05f551364de3b79a5`。覆盖拆碎、混群、未匹配噪声、门槛边界、全删除及无效标签测试；不改历史 many-to-one 表格。
+- 验证：`python -m pytest tests/test_openrouter_smoke.py tests/test_curation_one_to_one.py tests/test_minimal_prompt_baseline.py tests/test_curation_engineering_v1.py -q` → **76 passed**。这些是离线工程测试，不是模型成绩。
+- **付费执行被安全审批在进程启动前拦下：尚缺真实诊断图/数值向 OpenRouter 及下游 DeepInfra/Novita 外发的明确许可。没有推理请求、没有费用，也没有创建 live 运行结果。** 获许可后才做最多四次 smoke；兼容性、截断或解析失败立即停，不弱化协议。smoke 通过并完成全量运行器/评分/恢复验证后才启动 588 个 stepwise 与 8 次 rollout。
+
+### 2026-10-12 已获外发许可后的 smoke 结果（当前停止点）
+
+用户明确允许 CH3/20/30/31 诊断图及数值发往 OpenRouter、DeepInfra、Novita，不发送专家答案/评论；总预算 $25 不变。已执行独立 smoke，没有启动正式 stepwise 或 rollout。
+
+| 模型/端点 | 样本 | 状态 | 返回动作 | Input / Output tokens | 其中 reasoning tokens | 返回费用 USD |
+|---|---|---|---|---:|---:|---:|
+| Qwen3.5-9B / DeepInfra BF16 | CH31 step 1，Phase 1 四图 | 通过；14.30 s | KEEP | 1964 / 850 | 818 | 0.00032390 |
+| Qwen3.5-9B / DeepInfra BF16 | CH20 step 37，Phase 2 三图 | 通过；59.33 s | MERGE | 1615 / 2013 | 1800 | 0.00046345 |
+| Qwen3.5-27B / Novita BF16 | CH31 step 1，Phase 1 四图 | 路由 HTTP 404 | 无 | 无 | 无 | 未返回 usage |
+| Qwen3.5-27B / Novita BF16 | CH20 step 37，Phase 2 三图 | 未发送 | — | — | — | — |
+
+- 原始记录：`zero-shot baseline/runs/openrouter_smoke_20261012_v1/`（Git 忽略），包含请求哈希、端点目录、原始响应、决策、ledger 与 summary。两次 9B 响应均为 `finish_reason=stop`，通过本地 schema/动作/提供商核验，有 thinking 证据；这证明请求链路可用，不证明动作正确或图像有增量价值。
+- 27B 错误为 `No endpoints found that can handle the requested parameters`，`failed_routing_step=Filter by Parameters`；固定 Novita 后有一个端点，但未通过参数过滤。结合目录缺少 `structured_outputs`，严格 schema 是首要兼容性疑点；错误未逐项列出参数，不能声称服务端已确认唯一原因。没有自动放宽 schema、改成 FP8 或切换提供商。
+- 3 次 HTTP 推理端点请求、2 次有效响应；两次响应已知费用合计 **$0.00078735**。失败请求保留 **$0.09706752** 未结算预留（不是已花费用），原始账本保守占用合计 $0.09785487。紧接着只读账户接口仅显示 $0.00032390，尚未反映第二次成功调用；因此不拿延迟账单宣称失败请求已确认免费。
+- 全量离线输入核验另已通过：294 状态、588 份双模型请求，逐张图片和 payload 哈希一致；CH31/CH3/CH20/CH30=54/97/53/90，Phase 1/2=284/10。配对请求哈希列表摘要 `436c4e13d7860a999f38a19efa2cc7b0572fe24cfa8403c550b913e6a19e9f1f`。没有读取答案用于请求构建，没有额外推理。
+- 回归复测 **76 passed**。两个模型尚未同时通过 smoke；全量 OpenRouter 运行器、恢复、评分收集仍待完成。暂停付费调用，先决定如何处理 27B 端点条件；改变精度或输出协议必须明确记录并获用户确认，不能悄悄更改 baseline。
+- 后续终态报告采用 **one-to-one 主结果 + 旧 many-to-one 补充结果**，同一份终态离线重算，不增加模型调用；不是 many-to-many。Stepwise accuracy 单独报告。
+
+### 2026-10-12 FP8 获批、接入通过与正式实验启动
+
+用户同意 27B 使用 FP8。明确改为 `qwen/qwen3.5-27b` / `deepinfra/fp8`；9B 保持 `deepinfra/bf16`。不是自动 fallback；没有重复 9B smoke，也没有修改 prompt/图片/数值/schema/thinking/4000 上限。跨模型结果包含精度差异，不能只归因于参数规模；后续 harness 对照须保留各自部署条件。
+
+| 27B FP8 smoke | 动作 | Input / Output tokens | Reasoning tokens | 时间 s | 费用 USD |
+|---|---|---:|---:|---:|---:|
+| CH31 step 1，Phase 1 | KEEP | 1968 / 955 | 861 | 28.69 | 0.00299468 |
+| CH20 step 37，Phase 2 | MERGE | 1618 / 833 | 717 | 24.54 | 0.00258648 |
+
+- 两次均 HTTP 200、正常结束、通过严格本地解析及提供商核验。目录：`runs/openrouter_smoke_27b_fp8_20261012_v2/`。新增费用 $0.00558116，全部成功 smoke 已知费用 $0.00636851；旧失败 $0.09706752 保守预留仍保留。本轮不把 smoke 动作当成准确率成绩。
+- **旧失败结论：** Novita BF16 端点被 OpenRouter 的参数过滤拒绝，尚未到模型执行阶段。没有证据指向余额不足、图片损坏或模型动作错误；同一模型的 DeepInfra FP8 端点接受了相同内容和输出要求。精度与结构化输出支持是两件事，不能说“BF16 不支持 JSON”。结合官方端点参数目录，严格 schema 是首要疑点，旧错误未逐项确认，故不宣称已排除所有服务端因素。
+- **另查出的接入风险：** Astra 专用运行器的 Responses 封装、token 计数和价格不能直接用于 OpenRouter；现已新增独立入口。4000 tokens 包含 thinking，正式样本仍可能截断；若出现，记录并停止，不擅自加上限。API 默认采样、服务端图像处理、9B BF16/27B FP8 都是对照限制。控制器复查 SPLIT 不执行是既有算法限制，不是此次 404 原因。
+- 新入口：`scripts/run/run_openrouter_baseline.py`。默认 dry-run；共用 $25 总额，包含全部 smoke 成功消费和旧失败预留。按模型/stage/dataset 保存调用标签、原始响应、usage/cost、图像及请求哈希、操作前后 checkpoint。拒绝解析失败/截断、重试、fallback、隐式 JSON 修复。
+- 恢复：显式 `--resume` 从初态以已保存响应本地重放，并校验请求顺序/内容/响应哈希；已成功响应不再付费调用。存在失败或未知状态的请求则拒绝自动续发，需先核查；不会跳过失败样本。partial 结果不作为完整 accuracy 或终态。
+- 一对一主评分、旧多对一补充评分、no-curation 初态及误删专家 spikes 记录已接入新收集流程；同一预测只在本地重复评分。stepwise 分别报告完整分母、覆盖率、逐类指标及错误用例理由。没有专家答案或评论进入模型请求。
+- 离线测试：`python -m pytest tests/test_openrouter_baseline.py tests/test_openrouter_smoke.py tests/test_curation_one_to_one.py tests/test_minimal_prompt_baseline.py tests/test_curation_engineering_v1.py -q` → **89 passed**；全量 dry-run **588 请求校验通过**。
+- 正式目录：`runs/openrouter_qwen_dual_20261012_v1/`；manifest SHA256 `f8ce7c4d6eb434a5230758ab89d51949f1346bc5e31be7db9aad4a60065668c9`，包含代码快照、数据/配置/评分哈希。执行命令：`python -u scripts/run/run_openrouter_baseline.py --output-root 'zero-shot baseline/runs/openrouter_qwen_dual_20261012_v1' --execute --budget-usd 25`。已启动，先 9B/27B 各 294 个 stepwise，再各 CH31→CH3→CH20→CH30 rollout；**启动不等于完成**，最终状态以 `attempt_*/summary.json` 为准，调用明细位于 `calls/`。
+
+### 2026-10-12：截断核查与用户明确要求的续跑
+
+- v1 在 9B 的第 3 个正式 stepwise（CH31_000003）停止：HTTP 200，但 `finish_reason=length`；输出 4000 tokens，其中 reasoning 3328。前两个响应有效；27B 正式样本及 rollout 尚未开始。不是余额不足，也不作为动作判断错误；截断样本保持失败记录。
+- 停止时正式请求已知费用 $0.00171230，连同 smoke 已知费用 $0.00808081；另有旧 404 未结算预留 $0.09706752，保守累计 $0.10514833。预留不是已消费。
+- 用户要求继续后，新增离线 `--retry-truncated-from`：仅允许人工确认后对末尾、HTTP 200、有结算费用的 `length` 失败重试一次；不自动重试，不允许越过未知费用/传输失败。新目录继承失败费用并复用成功响应；保留父目录和全部原始失败数据，父子 manifest/请求/响应哈希可追溯。
+- 此次不改 prompt、图片、数值、controller、模型/端点、thinking 或 **4000-token 上限**。第二次仍截断则停止，不能反复抽样直到成功；发生过人工重试必须在结果中披露。
+- 新目录 `runs/openrouter_qwen_dual_20261012_retry_length_v2/`；manifest SHA256 `e83d8ea3b6560e86a4f29186d2e4e41a3d90a77e2bbe7afd1844cbe4eacff39b`。**93 项离线测试、588 请求预检通过**，随后显式启动 `--execute --budget-usd 25`；不是新增 $25，仍为本轮累计上限。最新状态以新目录 `attempt_*/summary.json` 为准。
+
+### 2026-10-12：8000-token 正式版本（取代 4000 试跑，不覆盖旧记录）
+
+- 4000 版本续跑结果：第 3 样本重试成功（1057 输出 tokens）；第 4 样本再次截断（4000 输出，其中 reasoning 3601）并停止。共 3 个有效预测，27B 正式样本与 rollout 未开始。第 3 样本有人工重试，不能当作一次尝试 baseline。旧费用及记录均保留。
+- 用户批准 **8000**（不是 8192）。两个模型统一总输出上限，仍开启 thinking；9B/DeepInfra BF16、27B/DeepInfra FP8，prompt、图像/数值、schema、controller、数据和评分规则不变。不改树图或加入专家答案/评论、skill、示例、反馈。Astra 历史上限为 4000，不能宣称全部推理配置相同。
+- 新版从头评测，每模型 294 个 stepwise + 4 个 rollout：**588 个 stepwise、8 个 rollout 尝试**。不复用 4000 版本的成功答案。每样本仅一次调用；同一版本断点恢复只在本地重放保存的有效响应或截断失败，不重新抽样。
+- **失败规则预先固定：** HTTP 200、模型/提供商正确、usage 费用已结算的 `length`：stepwise 记录失败且不补动作，继续下一独立样本；rollout 保存 `stopped.npz`，停止该通道、不产生终态成绩，继续下一通道。接口/传输/解析/计费/数据完整性错误仍停止全批，不自动重试或 fallback。8000 版本单次 HTTP 读取超时提高到 600 秒；超时未知费用保留预留，不自动补发。
+- **Stepwise 统计：** 报告 planned/attempted/valid/failed/unattempted、有效覆盖率、valid-only accuracy、correct/planned。只有全部样本均已尝试才给完整分母 accuracy；截断计非正确但不填 KEEP/DISCARD 或混入动作混淆矩阵，另列失败类别支持数。Rollout 只评分真正完成者；停止通道单列，不能把其余通道均值冒充全部完成。
+- **预算与分账：** 本轮总上限仍 $25；继承旧累计 $0.10630138，其中已知费用 $0.00923386，旧 404 未结算预留 $0.09706752。每次按完整上下文 + 8000 输出保守预留。新费用在 `attempt_*/cost_breakdown.json` 按模型及 stepwise/rollout 分开统计；旧试跑不混入新版成绩，但费用不遗漏。
+- **验证与执行：** 103 项离线测试通过（包括截断后继续、通道停止后继续、失败恢复不重发、预算和计费）；588 请求 dry-run 通过。新目录 `runs/openrouter_qwen_dual_20261012_8000_v3/`，manifest SHA256 `54367f5ea62bb0a326210c136fcd764f831d76249eba473ada1d1813da17d97e`。已启动，不等于完成；状态以 `attempt_*/summary.json` 为准，过程中查看 `stepwise_progress.jsonl` 与 `calls/`。结束后生成 `score.json`、`REPORT.md`、费用分账。
+
+```bash
+python scripts/run/run_openrouter_baseline.py --output-root 'zero-shot baseline/runs/openrouter_qwen_dual_20261012_8000_v3' --max-output-tokens 8000 --cost-history-from 'zero-shot baseline/runs/openrouter_qwen_dual_20261012_retry_length_v2'
+python -u scripts/run/run_openrouter_baseline.py --output-root 'zero-shot baseline/runs/openrouter_qwen_dual_20261012_8000_v3' --execute --budget-usd 25
+```
+
+第一条仅用于首次离线创建新目录，不对已有目录重复执行。运行中的配置与代码不可修改。
+
+### 2026-10-12：8000 版本上游 429 停止与显式恢复
+
+- v3 第 16 次请求 HTTP 429：DeepInfra 返回 `engine_overloaded`、`upstream_provider_shared_pool`，未返回 usage。程序保存原始错误并因费用未知停止；不是余额不足、token 截断或本地断连。停止时 9B 有 12 个有效预测、3 个已结算截断；27B 和 rollout 未开始。
+- v3 已知调用费用 $0.01014990；本轮累计已知费用 $0.01938376。另保留旧 404 预留 $0.09706752 和本次 429 预留 $0.03015584；累计费用及预留 $0.14660712。未知预留不宣称已消费，也不假定为免费。
+- 用户明确要求继续后，使用 `--retry-rate-limited-from` 创建续跑目录：前 15 个结果本地回放，12 个有效结果不重发、3 个截断仍是失败；只重试被 429 拒绝的第 16 个请求。不切换提供商、不改输入/8000/评分，不设自动重试。HTTP 429 基础设施恢复记录单列，不能抹掉原始失败；若再次报错仍停止。
+- 恢复路径 `runs/openrouter_qwen_dual_20261012_8000_resume429_v4/`；manifest SHA256 `d031a127dc4d74fd4b3a18ff9b96160cf7d899afdba84841c75c7783505d07c8`。108 项离线测试、588 请求哈希核验通过；恢复前费用核对为 $0.14660712，总上限仍 $25。已启动，最终状态以该目录 `attempt_*/summary.json` 为准。
+
+```bash
+python scripts/run/run_openrouter_baseline.py --output-root 'zero-shot baseline/runs/openrouter_qwen_dual_20261012_8000_resume429_v4' --max-output-tokens 8000 --retry-rate-limited-from 'zero-shot baseline/runs/openrouter_qwen_dual_20261012_8000_v3'
+python -u scripts/run/run_openrouter_baseline.py --output-root 'zero-shot baseline/runs/openrouter_qwen_dual_20261012_8000_resume429_v4' --execute --budget-usd 25
+```
+
+### 2026-10-12：临时过载的有限重试（v5）
+
+- v4 在 CH20 `000019` 再遇 HTTP 429，原始信息为 DeepInfra `engine_overloaded / upstream_provider_shared_pool`，不是余额不足。此前 CH31 54/54、CH3 97/97、CH20 17/53 已取得结果：133 个有效、35 个截断；27B 和 rollout 未开始。
+- 修正运行器先检查费用、掩盖 HTTP 错误的问题。用户同意后，仅对明确的上述 429（没有 choices/usage）启用同请求最多 3 次重试，等待至少 30/60/120 秒；遵守可解析的 `Retry-After`，要求等待超过 300 秒则停止。其他接口错误、超时、解析失败不重试，截断处理不变；不改端点、prompt、图像/数值、8000 上限、controller 或评分。
+- 新目录 `runs/openrouter_qwen_dual_20261012_8000_retry429_v5/` 复用全部 168 个有效/截断记录，仅从被拒绝的 CH20 `000019` 继续。每个 429 的原始响应和等待记录留在对应 `calls/*/overload_attempts/`；未知费用保留预留，每次重试另行检查预算。不把重试次数算成新评测样本，不重试直到答案正确。
+- 累计预算仍 **$25**。恢复前已知费用 **$0.13332886**（含旧试跑/smoke），未知预留 **$0.15737920**，合计预算占用 **$0.29070806**；预留不等于已消费。按模型和 stepwise/rollout 分账，429 HTTP 次数单列。
+- **122 项离线测试通过，588 个请求哈希核验通过**，dry-run 未联网。manifest SHA256：`9cc349f59156e1316d501e47ac016bab4ad447f524add3a41423599b70e0bdb0`。这只验证执行机制，不表示模型效果通过；执行状态以新目录的 progress/summary 为准。
+
+```bash
+python scripts/run/run_openrouter_baseline.py --output-root 'zero-shot baseline/runs/openrouter_qwen_dual_20261012_8000_retry429_v5' --max-output-tokens 8000 --retry-rate-limited-from 'zero-shot baseline/runs/openrouter_qwen_dual_20261012_8000_resume429_v4' --retry-overload
+python -u scripts/run/run_openrouter_baseline.py --output-root 'zero-shot baseline/runs/openrouter_qwen_dual_20261012_8000_retry429_v5' --execute --budget-usd 25
+```
+
+第一条只用于离线创建新目录，不对已有目录重复执行。执行时重试策略从冻结 manifest 读取，不在命令行临时改变。
+
+## 8. Claude baseline 复核（2026-10-12）
+
+**结论：可保留为同任务的闭源模型 baseline；平均表现更好，但不能称为可靠或全面优于 Astra。** 本节只读复核已有结果，没有新增推理。原始 [Claude 报告](results/minimal_opus55_high_dual_20261012_v3_full/REPORT.md)与 [Astra 一对一重算](results/minimal_astra_high_dual_20261007_resume150/terminal_scores_20261012/TERMINAL_SCORES.md)保留不改。
+
+- 条件：`claude-opus-5-5`，`high`、adaptive thinking，8000 总输出上限；同四通道、同 minimal prompt、数值定义、图片顺序、动作 schema、controller；不发送专家答案/评论，没有 skill、示例或反馈。Astra 为 `gpt-6-astra/high`、4000 上限。两家的 high、图像处理和采样不能视为等价算力设置。
+- 核验：294 组 stepwise 的 prompt、数值文本、schema、初态及 **1,166 张图片哈希**逐项匹配 Astra；共用代码哈希一致。4 个 MAT 哈希与注册记录一致，终态哈希及离线重新计算的初态/终态分数全部一致；**29 项离线测试通过**。
+- 执行：294 stepwise + 797 rollout 决策＝**1,091 次**；本次续跑实际新调用 1,071 次，另 20 个 pilot 响应本地复用，费用未重复计入。1,091 个保存响应均正常结束，**0 截断、0 重试**，最大输出 1,334 tokens。
+
+### 同口径比较
+
+Rollout 使用预注册一对一：IoU≥0.5、Hungarian 匹配；全部预测非零 spikes 计入分母，未匹配预测群不能删掉再打分。以下 F1 **不是**旧 many-to-one 数值，也不是逐步 accuracy。
+
+| 通道 | Astra stepwise | Claude stepwise | Astra rollout F1 | Claude rollout F1 | Claude 匹配专家 units | Claude 误删专家 spikes |
+|---|---:|---:|---:|---:|---:|---:|
+| CH31 | 14/54 | 24/54 | 0.4774 | 0.7169 | 3/3 | 0 |
+| CH3 | 37/97 | 55/97 | 0.2497 | 0.4162 | 2/2 | 0 |
+| CH20 | 19/53 | 28/53 | 0.3613 | 0.0000 | 0/1 | 17,857 |
+| CH30 | 32/90 | 48/90 | 0.2031 | 0.6435 | 1/3 | 40,284 |
+| 合计 / 通道宏平均 F1 | 102/294（34.69%） | 155/294（52.72%） | 0.3229 | 0.4442 | 6/9 | 58,141 |
+
+Claude 专家动作召回：DISCARD **37/158＝23.42%**；SPLIT **113/126＝89.68%**；MERGE **5/10＝50%**。这些标签没有 KEEP/NOT_MERGE，且由专家提供操作对象，因此不是完整自主策略准确率。四通道都已被反复查看，不能作为未接触的泛化测试。
+
+### 失败与项目意义
+
+- **CH20：** rollout 第 5 次决策把 cluster 1 整体 DISCARD，删掉 50,729 个参考噪声 spikes，同时删掉 17,857/18,465 个专家 spikes（96.71%）。终态仍有 608 个专家 spikes，但最大候选 IoU 仅 0.0186，达不到匹配门槛，所以一对一 F1＝0；不是“请求失败/没有输出”。
+- **CH30：** 第 6 次决策整体 DISCARD 一个含 325,968 spikes 的混合群：删除噪声 285,684，同时丢失 unit 2 的 28,823 和 unit 38 的 11,461 个 spikes；unit 31 的 50,821 个 spikes 保留并完全匹配。F1 提高不代表三个专家 units 都找到了。
+- 两次响应理由都把低幅值、混杂群判断为 noise / multi-unit，而不是继续拆分。**已证实的是这两次动作造成终态丢失；模型理由是自述，不足以确定唯一根因。** Astra 主要误保留噪声，Claude 此次同时暴露了“大混合群过早删除”的风险，不能只用平均 F1 选择模型。
+- 后续 harness 应把“纯噪声应删”与“混合群含可恢复 unit”分开验证，并同时约束噪声残留和专家 spike 损失；可研究延迟/可撤销删除，但须另立版本、固定开发/评测边界，不能回改 baseline 或用终态答案保护指定通道。
+
+### 费用与协议注意事项
+
+按保存 usage 和该运行登记价格估算：stepwise **$5.570216**，rollout **$15.375860**，合计 **$20.946076**；保守计费/预留 **$23.956375**。包含复用的 pilot 成本，不是服务商账单，也不包含其它独立试跑。
+
+运行器实际实现了“截断自动重试一次”，而原报告末尾写了 `No automatic ... retry`，表述不一致；本次未触发，未影响上述成绩。后续跨模型实验应先统一失败/重试政策，不把重复抽样隐藏成一次尝试。本次仅记录问题，未修改冻结脚本或历史报告。
