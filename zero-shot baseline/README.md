@@ -315,3 +315,112 @@ Claude 专家动作召回：DISCARD **37/158＝23.42%**；SPLIT **113/126＝89.6
 按保存 usage 和该运行登记价格估算：stepwise **$5.570216**，rollout **$15.375860**，合计 **$20.946076**；保守计费/预留 **$23.956375**。包含复用的 pilot 成本，不是服务商账单，也不包含其它独立试跑。
 
 运行器实际实现了“截断自动重试一次”，而原报告末尾写了 `No automatic ... retry`，表述不一致；本次未触发，未影响上述成绩。后续跨模型实验应先统一失败/重试政策，不把重复抽样隐藏成一次尝试。本次仅记录问题，未修改冻结脚本或历史报告。
+
+## 9. 2026-10-13：Qwen 9B 四通道 rollout 对照（本轮结束，8 个通道尝试均截断）
+
+- **只跑 Qwen3.5-9B**，OpenRouter → DeepInfra BF16。顺序：minimal 的 CH31/CH3/CH20/CH30，再按同顺序运行冻结 `system_v1 + skill_v0`。不重新跑 stepwise，不启动 27B，不发送专家答案或评论。两组各一次，共 8 个计划中的完整闭环；截断可能使实际闭环不完整。
+- **minimal 不是临时删掉 skill 的新 prompt。** 直接复用 Astra `minimal_astra_high_dual_20261007_v3` 的请求构造、两份 prompt、数值定义、四图/三图观测、初态与 controller；代码/配置核对通过，四通道首请求逐字节哈希与原 Astra 完全一致。完整轨迹会因模型动作而分叉，不声称每一步图片都相同。
+- 两组都继承原 `CurationController.run/apply/checkpoint`，不修改自动过滤、4000 小群阈值、递归拆分或 Phase 2 调度。harness 组使用现有 contract，system、skill、数值文本排版一起改变；实际图片和数值计算一致，**这是提示组件整体对照，不是只改变 skill 的单因素消融，也没有运行 continuous learning**。
+- 推理参数：thinking 开；`temperature=1.0, top_p=0.95, top_k=20, min_p=0.0, presence_penalty=1.5, repetition_penalty=1.0`，来自 [Qwen 官方通用思考配置](https://huggingface.co/Qwen/Qwen3.5-9B)。端点只读核验支持全部参数，`require_parameters=true`，禁止切换 provider。可减少重复，不保证减少截断；用户明确选择 **4000 总输出 tokens（含 thinking）**，没有采用官方 32768 的长度建议。Astra/high 与 Qwen thinking 不等价，Qwen 采样与服务端实现也不同；不是全套推理设置完全相同。
+- 用户确认：`finish_reason=length` 即该通道 **未完成**，保存状态，不执行动作、不补 KEEP、不重试截断，转到下一通道。无终态 P/R/F1，不能填 F1=0。接口 429/502/503/504 无 choices、连接/超时或中断的在途请求最多尝试 4 次（间隔至少 30/60/120 秒）；每次保留实际费用或未知预留。已保存响应只本地回放、不重复付费。余额、解析、配置变化、预算耗尽或恢复次数耗尽停止并报告；不会无限重试。
+- 两组合用原 **$25 累计上限**，各组分别记费用。最新旧账继承 **$0.46353701**，包括 v5 `attempt_002` 已有的 10 条 27B stepwise；这些旧记录不是本次启动，不混入本次 9B 指标。剩余可用额度约 $24.536463。已知服务商 cost 与未知预留分开，不将预留称为已消费。
+- 评分：一对一 Hungarian、IoU ≥ 0.5、**全部输出**计入 precision 分母为主；历史多对一另列；只评分 completed 终态，未完成单独统计。本次没有新 stepwise accuracy；旧 8000/default-sampling 的 stepwise 不能当成本次 4000/显式采样下的结果。
+- **118 项离线测试通过**（含 Astra 输入一致、只允许 9B、预算、截断后转通道、已保存响应恢复、未知费用保留、有限重试）。新入口 `scripts/run/run_qwen9b_rollout_comparison.py`，测试 `tests/test_qwen9b_rollout_comparison.py`；旧脚本、prompt、skill、配置和历史结果不改。
+- 新目录：`runs/qwen9b_rollout_comparison_20261013_4000_v1/`。manifest SHA256：`bdc718bb7a07e3863785c5fe4be6e268c1e6e3f7510a2b25783a6b0ed5c573ae`。执行时看 `progress.json`，完成/停止后看 `execution_status.json`、`REPORT.md`、`results.json`、`cost_breakdown.json`；完整响应/重试在 `calls/`，图和状态在 `attempt_*/<arm>/<dataset>/`。所有原始运行产物不上传 Git。
+- 已经发送真实请求：minimal CH31 第 1 步有效返回 SPLIT，provider cost $0.00048570；只证明本次参数、图片与响应接口可用，不代表该通道完成或截断率改善。后续进展以运行目录状态为准。
+
+```bash
+# 历史 4000 版本的执行命令（当时使用）。该实验已结束；当前入口已升级 8000/6000，不要对旧目录执行或 resume。
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 .venv/bin/python -u scripts/run/run_qwen9b_rollout_comparison.py --output-root 'zero-shot baseline/runs/qwen9b_rollout_comparison_20261013_4000_v1' --execute --budget-usd 25
+# 进程确实停止后才可恢复；先核验冻结配置，再本地回放响应，重建调度。
+# 上述执行命令加 --resume；锁阻止同一目录的并发执行。
+```
+
+### 本轮结果与核验（2026-10-13）
+
+**程序正常退出 `completed_with_failures`，不是 8 条完整 rollout 成功。** 两组各 4 个通道均在 Phase 1 触发 4000-token 截断，完成率均 0/4；没有终态 P/R/F1，也没有本轮 stepwise accuracy。按已确认规则，每次截断保存当前状态并转下一通道，没有补动作、重试截断或加大上限。
+
+| 通道 | minimal：截断步数 | system_v1 + skill_v0：截断步数 | 终态评分 |
+|---|---:|---:|---|
+| CH31 | 2 | 5 | 两组均未完成，N/A |
+| CH3 | 3 | 1 | 两组均未完成，N/A |
+| CH20 | 5 | 1 | 两组均未完成，N/A |
+| CH30 | 8 | 11 | 两组均未完成，N/A |
+
+| 组别 | 请求数 | 有效动作 | 截断 | 输入 tokens | 输出 tokens（含 thinking） | 服务商报告费用 |
+|---|---:|---:|---:|---:|---:|---:|
+| minimal | 18 | 14 | 4 | 35,651 | 37,468 | $0.00918530 |
+| system_v1 + skill_v0 | 18 | 14 | 4 | 48,630 | 41,531 | $0.01109265 |
+| 合计 | 36 | 28 | 8 | 84,281 | 78,999 | **$0.02027795** |
+
+- **失败机制已核实：** 36 次响应均 HTTP 200；8 次失败均 `finish_reason=length`、`completion_tokens=4000`。其中 6 次没有最终正文，2 次仅有不完整 JSON（调用 000010 / 000036）；均没有完整可执行的动作回答。不是网络、余额不足、解析器误删合法 JSON 或 controller 执行动作失败。没有任何重试或本轮未知扣费。
+- **结果边界：** 本轮说明“官方通用 thinking 采样 + 4000 输出上限”在这四通道、两种提示组件下均不能稳定完成闭环。不能据此比较两组终态质量、宣称 skill 无效，或将未完成填成 F1=0；两组调用级截断比例都为 4/18，仅描述这些自适应且提前停止的轨迹，不是独立样本准确率。此前 8000/default-sampling 的 stepwise 不与本轮混算。
+- **费用：** 新增 $0.02027795（服务商 cost 字段，非最终账单）；加继承旧账 $0.46353701，累计费用及旧预留 **$0.48381496 / $25**。新增费用全部已记录，无新未知预留；没有继续使用剩余预算启动实验。
+- **离线复核通过：** 36 请求均为 9B、DeepInfra BF16、指定采样、4000 上限；8 个截断后的 snapshot 哈希均与失败请求之前的状态相同，无伪造 terminal 文件；输入、配置、代码与评分规则哈希保持冻结。核验摘要见运行目录 `postrun_verification.json`，原响应、失败标记、状态、费用均保留。
+- **用量字段限制：** 18 个响应的服务商 `reasoning_tokens` 大于 `completion_tokens`，细分字段不自洽；保留原值，不用它精确估计 thinking 占比，也不把 reasoning 再加一次计费。36 次 cost 均与已记录的 input/output tokens × 固定单价一致。保存的 HTTP 等待累计约 61 分钟，不冒充完整端到端耗时。
+- 当前已停止，无在途推理。本轮只得到有完整失败记录的闭环尝试，尚未得到可与 Astra/Opus 终态 F1 对比的 Qwen 9B 完整 baseline；后续如改长度或关闭 thinking，必须另立配置，不回改这些失败。
+
+### 独立 thinking budget 接入探测（2026-10-13，已结束）
+
+**未验证出可靠的硬性思考上限，暂不据此恢复四通道 rollout。** OpenRouter 模型目录的 Qwen 9B `reasoning` 仅有 `mandatory=false`，未声明 `supports_max_tokens`；DeepInfra BF16 端点声明支持 `reasoning`，不能由此推断每个子参数都会按硬上限执行。[OpenRouter 参数说明](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens)／[DeepInfra 参数说明](https://docs.deepinfra.com/chat/reasoning)。
+
+- 只重用上一轮 minimal CH31 第 2 步的**同一保存状态、四张 PNG、数值、prompt、schema、采样与 DeepInfra BF16 路由**，图片及原请求哈希核验通过。唯一请求差异是新增 `reasoning.max_tokens`；总 `max_tokens=4000`、thinking 开、`require_parameters=true` 不变。两次独立单请求，无重试、无 fallback、不提供专家答案、不执行返回动作，不计入 stepwise／rollout 成绩。
+- 为避免依赖服务端不自洽的 reasoning 用量，使用官方 `Qwen/Qwen3.5-9B` tokenizer（revision `c202236235762e1c871ad0ccb60c8ee5ba337b9a`）独立统计返回的 reasoning 文本，`add_special_tokens=false`。这是返回文本的重新分词，不冒充服务端内部精确计数；tokenizer 与 `tokenizers==0.22.1` 仅放临时目录，未安装进项目环境、未下载模型权重。
+
+| 请求 thinking 上限 | 独立计数：返回思考文本 | 服务端 reasoning / 总输出 tokens | 响应 | HTTP 耗时 | 费用 |
+|---|---:|---:|---|---:|---:|
+| 128 | **1,126** | 1,226 / 1,222 | HTTP 200，stop，有效动作 JSON | 148.1 秒 | $0.00038150 |
+| 3,000 | 1,481 | 1,557 / 1,560 | HTTP 200，stop，有效动作 JSON | 229.5 秒 | $0.00043220 |
+
+- **判定：** 128 明显没有被当作请求的硬上限执行；不能排除参数被忽略、转成 effort 或受到最低预算限制，不能单凭黑盒结果指定唯一原因。3,000 那次自然生成少于上限，属于“本次未超限，但未证明硬上限生效”，并不证明它能在更长推理时强制转入答案阶段。两次无截断也不能证明相对上一轮改善，因为请求各只有一次、采样随机、用例定向选择。
+- **费用单列：** 新增 **$0.00081370**，无未知新预留；继承上一轮及旧账后累计费用／预留 **$0.48462866 / $25**。已停止，不自动增大输出长度、关闭 thinking、切换服务商或启动整批实验。
+- 新入口 `scripts/run/probe_qwen_thinking_budget.py`（默认离线、`--execute` 每目录只发一次），测试 `tests/test_qwen_thinking_budget_probe.py`；9 项专属离线测试通过，与相邻运行器合计 47 项通过。结果分别在 `runs/qwen9b_thinking_budget_probe_20261013_128_v1/` 与 `runs/qwen9b_thinking_budget_probe_20261013_3000_v1/`，含请求哈希、原响应、独立计数和费用；第二目录 `REPORT.md` 汇总结论。
+
+### 新配置：8000 总输出 / 请求 6000 thinking（2026-10-13，先离线验证，后授权启动）
+
+- 用户指定后，`scripts/run/run_qwen9b_rollout_comparison.py` 的两组请求统一改为 `max_tokens=8000`、`reasoning={enabled:true, exclude:false, max_tokens:6000}`；仅 Qwen3.5-9B / DeepInfra BF16。**6000 是请求参数，硬上限执行仍未验证，不能宣称保证预留 2000 tokens 给答案。**
+- 原 minimal prompt、system_v1/skill_v0、图像和数值、采样、controller、评分不变；controller 的 **4000 spikes** 大小群划分阈值不改。Astra 历史仍是 4000 总输出，不能将新配置写成与 Astra 推理预算相同。
+- 总预算仍沿用 $25；每次预留按整个上下文加 **8000 输出**计，$0.03015584。已有费用／预留截至两次探测为 $0.48462866，后续准备正式运行时须完整继承，不从旧的 $0.46353701 重置。
+- 失败政策未变：达到总输出上限而截断，停止该通道、保留断点、转下一通道；不补动作、不跳过该群继续同一通道、不自动重试截断。
+- manifest 新版本 `qwen9b-rollout-comparison-8000-thinking6000-v2` 记录两个参数及 `thinking_budget_enforcement=unverified`；拒绝用当前入口恢复旧 4000 目录。旧结果、输入、费用、冻结代码快照全部保留，新实验需新目录，不能混用旧成功响应。
+- **配置修改时仅做离线验证，没有发送推理请求。** 当时 token 参数拒绝、8000 费用预留、旧 manifest 拒绝恢复等 **131 项回归测试通过**；另用 CH31 已保存真实图像／数值离线组装请求，确认仅总输出和 thinking 预算两处改变，历史 manifest 未变。
+
+#### 同日续跑：用户授权“再跑”后已启动
+
+- 顺序：minimal CH31 → CH3 → CH20 → CH30，再同顺序 `system_v1 + skill_v0`，共 8 个 rollout 尝试，只跑 9B。不重用旧模型答案，不新增 stepwise。
+- 补齐只读费用继承：旧运行的实际费用／未知预留 + 4000 轮次 + 两次 thinking 探测，去重核对 **$0.48462866**；新请求每次预留 $0.03015584，仍在原 $25 累计上限内。**136 项离线回归测试通过**，包括旧预留保留、探测不重复计费、历史账变动或仍在运行时拒绝启动。
+- 4 个通道的 Astra 原始首请求哈希均核验一致；生成 8 份 Qwen 请求预览。只保证 minimal 的提示词与输入复用，不声称与 Astra 的模型／生成参数一致。
+- 新目录：[`runs/qwen9b_rollout_comparison_20261013_8000_thinking6000_v2/`](runs/qwen9b_rollout_comparison_20261013_8000_thinking6000_v2/)。manifest SHA256：`22ebb8365645d43b8d34653754056dd1ab5c871cf53b92af7483616aec0edec8`。代码已冻结为快照；旧目录不修改。
+- 启动记录：`attempt_001` 的 minimal CH31 第 1 步已有效返回 SPLIT，费用 $0.00033615，正在请求第 2 步，尚无终态成绩。实时状态看 `progress.json`，停止／结束看 `execution_status.json` 与 `REPORT.md`；响应、费用和两组状态分别保存。**6000 thinking 硬上限仍未证实**，不将请求成功等同于硬限制生效。
+
+```bash
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 .venv/bin/python -u scripts/run/run_qwen9b_rollout_comparison.py --output-root 'zero-shot baseline/runs/qwen9b_rollout_comparison_20261013_8000_thinking6000_v2' --execute --budget-usd 25
+# 仅在确认进程停止后恢复：同一命令追加 --resume。不要重复启动正在运行的任务。
+```
+
+#### 2026-10-13：CH31 第 22 步过载停止与显式恢复
+
+- `attempt_001` 于美东 10:31 停止：minimal CH31 前 21 步有效（SPLIT 8 / KEEP 11 / DISCARD 2），第 22 步连续 4 次 HTTP 429；服务商明确报告 DeepInfra `engine_overloaded / upstream_provider_shared_pool`。没有截断，成功响应最大输出 4,383 tokens；尚无完整通道成绩，其他通道及 harness 未开始。
+- 停止时本轮已知费用 $0.01065265，4 次错误因无 cost 字段保留 $0.12062336 未知预留；连同历史费用／预留占用 **$0.61590467 / $25**。未知预留不是已确认扣款。
+- 用户“继续重试”后启用独立入口 `scripts/run/retry_qwen9b_transport.py`：只对第 22 步新增最多 4 次尝试（005–008），前 21 步仅本地回放并逐请求核验哈希。其后新动作仍最多 4 次传输尝试；截断仍停止该通道、转下一通道，不补动作。
+- 原运行器、manifest、prompt、skill、观测、controller、评分与旧尝试不改；此次重试扩展记在同一目录的 `transport_recovery/round_001/`（授权依据、旧文件哈希、恢复脚本快照），重建轨迹存 `attempt_002/`。不得把恢复进程启动写成已完成 baseline。**145 项离线测试通过**，涵盖无网络检查、成功响应不重付费、旧预留保留、新重试上限、截断不重试、请求变化即停。
+
+```bash
+# 已执行本命令开启 round_001；不要在任务运行时再执行。
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 .venv/bin/python -u scripts/run/retry_qwen9b_transport.py --output-root 'zero-shot baseline/runs/qwen9b_rollout_comparison_20261013_8000_thinking6000_v2' --execute
+# 同一授权轮中断后恢复：上面命令加 --resume，不追加尝试额度。
+```
+
+#### 2026-10-14：CH31 终态结果与 CH3 恢复
+
+- 上一执行轮 `attempt_002` 已完成 minimal CH31：67 次判断、25 次修改操作。一对一 Hungarian / IoU≥0.5、全部预测输出计分：**Precision 0.610861 / Recall 0.772833 / F1 0.682367**；16 个预测群中仅 1 个匹配专家 unit（共 3 个专家 unit）。误删专家 spikes 11,434，保留参考噪声 spikes 24,780；不能将“完成闭环”写成质量合格。
+- CH3 前 11 步有效，第 12 步连续四次共享池过载 429，10 月 13 日美东 18:31 停止。该配置累计 78 个有效动作、18 次 HTTP 429、0 次长度截断；CH20/CH30 及 harness 四通道尚未开始。
+- 本轮停止时已知费用 $0.03998375，未知预留 $0.54280512；含历史费用／预留 **$1.06741753 / $25**。预留不当作实际扣款。
+- 用户 10 月 14 日要求继续后，39 项恢复／运行器离线测试重新通过，启动 `transport_recovery/round_002` / `attempt_003`：只对 CH3 第 12 步增加最多 4 次传输尝试，原 78 个成功动作本地回放；CH31 不重复调用模型。保持 9B、8000/请求6000、原 prompt/controller/评分及顺序，minimal 四通道后再 harness 四通道。最新实际执行位置以 `progress.json` 为准。
+
+#### 2026-10-14：CH3 第 27 步执行失败，当前已停止
+
+- `attempt_003` 于美东 11:34 停止：CH3 的 cluster 332 仅含 1 个初始子群（35 spikes），模型仍返回 SPLIT；controller 报 `No last merge to split`，保留失败前状态。不是截断或接口过载；没有代填 KEEP，也没有把未完成通道记为 F1=0。
+- 当前仅 minimal CH31 完成，CH3 未完成；CH20、CH30 及本轮四通道 harness 尚未开始。累计 112 次 HTTP 尝试、94 份格式有效响应（其中最后一份动作不可执行）、18 次 429、0 次长度截断。
+- 本轮已知费用 **$0.04836665**、未知费用预留 **$0.54280512**；含历史费用／预留合计 **$1.07580043 / $25**。未知预留不等于实际扣款。
+- 现场：`attempt_003/minimal/cM2-e004_004-006_CH3/step_00027/request.json`、`calls/000094/decision.json` 和该通道 `stopped.npz`。这是动作可执行性问题，传输重试不能解决；下一步需先明确不可执行 SPLIT 的处理协议。本次仅归档状态，不改冻结代码、不重发请求。
