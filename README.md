@@ -108,6 +108,21 @@ Detailed dated reports are in `docs/archive/`; four fixed-state reports and two
 progress updates have been consolidated there. Archived recommendations are
 not current instructions.
 
+### Local storage cleanup — 2026-10-19
+
+Removed 434 byte-identical `.fig` duplicates from the external dataset's
+`oldFormat/` directories, retaining all corresponding current-format originals,
+and cleared 130 generated cache files (about 2.44 GiB reclaimed in total).
+Real MAT files, annotations, unique figures, paid-run evidence, source code and
+Git history were retained. With explicit follow-up approval, also deleted the
+12 `setting_002/003` raw `recording.h5` files and the `setting_001` raw archive
+(another 17.44 GiB; no backup retained by this cleanup). The other 1,580 simulation
+files/configurations were hash-verified unchanged. Simulation raw recordings
+must be regenerated if needed again. Local deletion records and the duplicate
+figure restoration map are in `output/maintenance_cleanup_20261019/` (not uploaded).
+All 54 recovery tests passed; frozen code/data, checkpoints and the Qwen cost
+ledger verified unchanged. No inference requests were sent.
+
 ## Upstream reference
 
 This research repository is based on JianZhi Shen's original implementation:
@@ -188,7 +203,7 @@ MountainSort5, and the strict teacher criteria.
 
 | Stage | Retained record | Status / interpretation |
 |---|---:|---|
-| 1. Simulation and overclustering | 20-channel raw archive | Raw recordings and derived arrays were generated for all channels, then compressed to `output/archives/setting_001_raw_20260820.tar.gz`; live `raw/` directories are no longer retained. |
+| 1. Simulation and overclustering | Historical run; raw archive removed | Raw recordings and derived arrays were generated for all 20 channels and archived. The archive `output/archives/setting_001_raw_20260820.tar.gz` was deleted with user approval on 2026-10-19; live `raw/` directories were already absent. Configurations and downstream records remain, but the raw data are no longer retained here. |
 | 2. Canonical actions | 34 valid GT actions | The corrected rebuild contains 18 `KEEP` and 16 `SPLIT` actions. The older 234-action artifact was archived after 200 non-progressing `SPLIT` actions from `ch_017` were identified as invalid. |
 | 3. Teacher-student trajectories | 82 current steps across 20 channels | The corrected mock rebuild verifies state transitions and RAG data flow; one channel produced zero post-filter steps. |
 | 4. Adaptation data | 12 train channels, 5 eval channels, 8 training examples | The retained `n12_seed0_qwen35` run prepared JSONL and Hugging Face data. Only non-`KEEP` mistakes are sampled, so the current eight examples are all `SPLIT`; no trained checkpoint is retained. |

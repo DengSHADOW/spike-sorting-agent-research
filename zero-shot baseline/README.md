@@ -424,3 +424,20 @@ OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 .venv/bin/python -u scripts/run/retry_q
 - 当前仅 minimal CH31 完成，CH3 未完成；CH20、CH30 及本轮四通道 harness 尚未开始。累计 112 次 HTTP 尝试、94 份格式有效响应（其中最后一份动作不可执行）、18 次 429、0 次长度截断。
 - 本轮已知费用 **$0.04836665**、未知费用预留 **$0.54280512**；含历史费用／预留合计 **$1.07580043 / $25**。未知预留不等于实际扣款。
 - 现场：`attempt_003/minimal/cM2-e004_004-006_CH3/step_00027/request.json`、`calls/000094/decision.json` 和该通道 `stopped.npz`。这是动作可执行性问题，传输重试不能解决；下一步需先明确不可执行 SPLIT 的处理协议。本次仅归档状态，不改冻结代码、不重发请求。
+
+#### 2026-10-14：范围收窄，仅续跑 minimal（用户授权）
+
+- 用户确认“把 minimal 跑完就 ok”：保留 CH31 终态，将 CH3 第 27 步登记为 `stopped_invalid_action`（未完成、无终态分数），只继续 CH20 → CH30，之后停止。**取消本轮后续四通道 harness，不新增 stepwise 或重跑 CH31/CH3。**
+- 新入口 `scripts/run/complete_qwen9b_minimal.py`；只改变批次停止规则：不可执行的叶子群 SPLIT 停止该通道、保留现场后转下一通道。截断政策不变；其他执行错误、解析失败、鉴权／预算／来源校验失败及传输重试用尽仍停止整批。不代填 KEEP，不重新抽取模型答案，不限制／修改模型动作 schema。
+- 原 prompt、controller、图像／数值、8000/请求6000、官方采样、provider、评分和旧 manifest 均不改。授权修订、代码快照及原证据哈希另存同目录 `minimal_completion_v1/`；续跑从第 95 个判断开始，原 94 份响应不重复请求。累计费用／未知预留起点 **$1.07580043 / $25**，不清零旧费用。
+- **160 项离线测试通过**，包含仅 minimal 调度、禁止 harness、旧响应免费复用、费用保留、不可执行 SPLIT 无代填动作、其他错误仍停止、证据篡改拒绝。真实断点 dry-run 核验通过，API 调用数为 0；本节记录授权与启动准备，不冒充已完成结果。
+
+```bash
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 .venv/bin/python -u scripts/run/complete_qwen9b_minimal.py --output-root 'zero-shot baseline/runs/qwen9b_rollout_comparison_20261013_8000_thinking6000_v2' --execute
+# 中途退出后的恢复：仅在确认进程停止后加 --resume；不会追加已用尽的传输尝试额度。
+# 不再用旧两组入口恢复，以免启动已取消的 harness。
+```
+
+- **本次实际续跑结果：已停止，未完成剩余通道。** `attempt_004` 的 CH20 第 1 步（全局判断 95）连续 4 次返回 HTTP 429，均为 DeepInfra `engine_overloaded / upstream_provider_shared_pool`；无模型判断、无动作执行，CH30 尚未开始，harness 仍为 0 次请求。不是输出截断或 CH3 的拆分错误。
+- 服务商没有返回这 4 次错误的费用，因此保留新增未知预留 **$0.12062336**，不宣称已扣费或免费；本轮已知费用仍 $0.04836665，未知预留共 $0.66342848，含历史账总占用 **$1.19642379 / $25**。原响应／状态／已完成结果均保留。
+- 当前剩余：minimal CH20、CH30；CH3 作为失败尝试归档，没有完整终态。此次有限重试已用尽，普通 `--resume` 不会增加重试额度；需等服务商恢复后另记有界传输恢复轮次，且只能调用 minimal 完成入口，不能恢复旧两组调度。
