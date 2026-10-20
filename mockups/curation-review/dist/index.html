@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f6f7f9">
+  <meta name="description" content="An interactive expert review mockup for spike curation. Inspect evidence, correct proposed actions, and review feedback. All data is illustrative.">
+  <title>SpikeAgent · Expert review</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="rail" aria-label="Primary navigation">
+      <a class="brand" href="#review" aria-label="SpikeAgent home"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M3 17h6l4-11 5 21 4-13 3 3h4"/></svg></a>
+      <div class="rail-nav">
+        <button class="nav-item active" data-view="review" title="Review workspace" aria-label="Review workspace"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 3v18M8 9h13"/></svg><span>Review</span></button>
+        <button class="nav-item" data-view="history" title="Feedback history" aria-label="Feedback history"><svg viewBox="0 0 24 24"><path d="M4 7a9 9 0 1 1-1 9M3 3v5h5M12 7v5l3 2"/></svg><span>History</span></button>
+        <button class="nav-item" data-view="revisions" title="Workflow revisions" aria-label="Workflow revisions"><svg viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10M8 17c6 0 10-3 10-7"/></svg><span>Revisions</span></button>
+      </div>
+      <button class="rail-help" id="tour-button" title="About this demo" aria-label="About this demo">?</button>
+      <div class="avatar" title="Demo reviewer">ER</div>
+    </aside>
+    <div class="app">
+      <header class="topbar">
+        <div class="product"><strong>SpikeAgent</strong><span class="slash">/</span><span id="page-name">Expert review</span></div>
+        <div class="top-actions"><span class="demo-pill"><span></span>INTERACTIVE MOCKUP</span><button class="button small" id="export-button"><span aria-hidden="true">↗</span> Export feedback</button></div>
+      </header>
+      <div class="demo-notice"><span class="notice-dot"></span><strong>Meeting demo</strong><span>All signals, cases, and AI suggestions are illustrative. Decisions are saved only in this browser.</span><button id="reset-button">Reset demo</button></div>
+
+      <section id="view-review" class="view active">
+        <div class="page-heading">
+          <div><div class="eyebrow">HUMAN-IN-THE-LOOP CURATION</div><h1>Evidence first. Your call.</h1><p>Inspect the signals, review the proposed action, and leave a correction the system can use.</p></div>
+          <div class="session-summary"><span class="live-dot"></span><div><strong>Demo recording · Session 04</strong><span>6 review cases · synthetic signals</span></div><button id="packet-button" class="icon-button" title="Inspect model input" aria-label="Inspect model input"><svg viewBox="0 0 24 24"><path d="M8 3H5v18h14V3h-3M9 3h6v4H9zM8 12h8M8 16h5"/></svg></button></div>
+        </div>
+        <div class="workspace">
+          <aside class="queue-panel">
+            <div class="queue-heading"><h2>Review queue <span class="count">6</span></h2><span class="muted small-text">Priority order</span></div>
+            <label class="search"><svg viewBox="0 0 24 24"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/></svg><input id="case-search" placeholder="Find a unit or channel…" aria-label="Find a unit or channel"></label>
+            <div class="filters" aria-label="Filter cases"><button class="active" data-filter="all">All <span>6</span></button><button data-filter="pending">Pending <span id="pending-count">6</span></button><button data-filter="reviewed">Reviewed <span id="reviewed-count">0</span></button></div>
+            <div id="case-list" class="case-list"></div>
+            <div class="queue-footer"><div><strong id="progress-text">0 of 6 reviewed</strong><span id="progress-percent">0%</span></div><div class="progress-track"><div id="progress-bar"></div></div><p>Every correction keeps its evidence and reason.</p></div>
+          </aside>
+
+          <main class="evidence-panel">
+            <div class="case-heading"><div><div class="eyebrow" id="case-channel"></div><h2 id="case-title"></h2><div class="case-badges" id="case-badges"></div></div><button class="button small" id="input-button">View model input <span aria-hidden="true">↗</span></button></div>
+            <div class="metrics" id="metrics"></div>
+            <div class="evidence-tabs" role="tablist" aria-label="Evidence views"><button class="active" role="tab" aria-selected="true" data-tab="overview">Overview</button><button role="tab" aria-selected="false" data-tab="timing">Timing</button><button role="tab" aria-selected="false" data-tab="stability">Drift & location</button><button role="tab" aria-selected="false" data-tab="tree">Split tree</button></div>
+            <div id="evidence-content"></div>
+            <div class="evidence-footer"><span><span class="teal-dot"></span>Model-visible evidence</span><span class="mono">Synthetic preview · not recorded spikes</span></div>
+          </main>
+
+          <aside class="decision-panel">
+            <div class="decision-heading"><h2>Your review</h2><span class="reviewer-chip"><span></span>Expert</span></div>
+            <div id="suggestion"></div>
+            <div id="validity-warning"></div>
+            <fieldset class="action-fieldset"><legend>Choose the next action</legend><p>Accept the suggestion or replace it.</p><div id="action-grid" class="action-grid"></div></fieldset>
+            <div id="action-context"></div>
+            <div class="reason-section"><label for="reason-select">Reason <span id="required-indicator">optional</span></label><select id="reason-select"><option value="">Choose a reason…</option><option>Mixed cluster — inspect a split</option><option>Looks like noise or artifact</option><option>Evidence supports one unit</option><option>Evidence supports separate units</option><option>Evidence is missing or ambiguous</option><option>Action is not executable here</option><option>Other / add a note</option></select><label for="review-note" class="sr-only">Review note</label><textarea id="review-note" rows="3" placeholder="What did the model miss? Add a short note…"></textarea></div>
+            <div class="decision-preview" id="decision-preview"></div>
+            <div id="form-error" class="form-error" role="alert"></div>
+            <button class="button primary full" id="save-button">Save review & next <span aria-hidden="true">→</span></button>
+            <div class="decision-bottom"><button id="defer-button">Defer for more evidence</button><span>⌘ / Ctrl + Enter to save</span></div>
+          </aside>
+        </div>
+        <div class="bottom-strip"><span><span class="live-dot"></span>Review session ready</span><span>Evidence → expert decision → feedback record</span><button id="history-link">View feedback history <span aria-hidden="true">→</span></button></div>
+      </section>
+
+      <section id="view-history" class="view">
+        <div class="page-heading"><div><div class="eyebrow">EXPERT FEEDBACK</div><h1>A record of your reasoning.</h1><p>Each decision stays linked to the proposal, evidence snapshot, and your correction.</p></div><button class="button" id="history-export">Export JSON <span aria-hidden="true">↗</span></button></div>
+        <div id="history-stats" class="history-stats"></div>
+        <div class="history-card"><div class="section-title"><div><h2>Review history</h2><p>Latest decision for each case. Undo returns it to the queue; the export retains the full event log.</p></div><span class="pill">Browser-local</span></div><div id="history-list"></div></div>
+      </section>
+
+      <section id="view-revisions" class="view">
+        <div class="page-heading"><div><div class="eyebrow">A CONCEPT TO DISCUSS</div><h1>From feedback to a better workflow.</h1><p>Explore how expert corrections could become testable changes. No training or evaluation is running.</p></div><span class="pill amber">Concept preview</span></div>
+        <div class="revision-flow"><div><span>01</span><strong>Collect corrections</strong><p>Preserve the case and expert reason.</p></div><span class="flow-arrow">→</span><div><span>02</span><strong>Propose a change</strong><p>Make one specific, reviewable revision.</p></div><span class="flow-arrow">→</span><div><span>03</span><strong>Test independently</strong><p>Check held-out cases before adoption.</p></div><span class="flow-arrow">→</span><div><span>04</span><strong>Approve a version</strong><p>Keep a history and a way to revert.</p></div></div>
+        <div class="revision-layout"><div class="revision-card"><div class="section-title"><span class="pill">Illustrative revision · R-003</span><span class="muted small-text">Not generated from this session</span></div><h2>Check whether an action can be executed.</h2><p>A cluster with no remaining children cannot be split. The interface can remove that choice and preserve the case for further review.</p><div class="diff"><div><span class="diff-label">CURRENT BEHAVIOR</span><p>Offer KEEP, SPLIT, and DISCARD for every cluster.</p><p class="diff-minus">− An impossible SPLIT can interrupt the review.</p></div><div><span class="diff-label">PROPOSED BEHAVIOR</span><p>Read the current tree state before presenting actions.</p><p class="diff-plus">+ If the node is a leaf, offer KEEP, DISCARD, or DEFER.</p></div></div><div class="revision-tags"><span>Action validity</span><span>No model weight changes</span><span>Reversible</span></div></div><div class="revision-card"><div class="eyebrow">VALIDATION GATE</div><h2>Evidence before adoption.</h2><div class="gate"><span>1</span><div><strong>Regression cases</strong><p>Does the change preserve valid decisions?</p></div><span class="not-run">Not run</span></div><div class="gate"><span>2</span><div><strong>Unseen recordings</strong><p>Does it help beyond the corrected cases?</p></div><span class="not-run">Not run</span></div><div class="gate"><span>3</span><div><strong>Expert review</strong><p>Are the trade-offs acceptable?</p></div><span class="not-run">Pending</span></div><div class="concept-note">This is a proposed interface for discussion, not an approved research design or a deployed learning system.</div></div></div>
+      </section>
+      <footer class="page-footer"><span>SpikeAgent <span class="muted">/ Human review workspace</span></span><span>Interface concept · October 2026</span></footer>
+    </div>
+  </div>
+  <dialog id="info-modal"><div class="modal-heading"><h2 id="modal-title"></h2><button id="close-modal" class="icon-button" aria-label="Close dialog">×</button></div><div id="modal-content"></div></dialog>
+  <div id="toast" class="toast" role="status"></div>
+  <script src="app.js"></script>
+</body>
+</html>
