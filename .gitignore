@@ -3,6 +3,7 @@ __pycache__/
 *.py[oc]
 build/
 dist/
+!/mockups/curation-review/dist/
 wheels/
 *.egg-info
 .env
@@ -11,6 +12,7 @@ wheels/
 .DS_Store
 # Virtual environments
 .venv
+.venv-interface/
 
 data/
 *.mat

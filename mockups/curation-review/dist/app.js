@@ -1,8 +1,8 @@
 'use strict';
 
-// Every signal and suggestion below is synthetic meeting material.
-// No real model calls, recordings, or changes to spike assignments are made.
-const CASES = [
+// Demo cases remain separate from the server's verified real-data bundle.
+// Neither mode invokes a model or changes spike assignments.
+const DEMO_CASES = [
   {id:'U-042',channel:'CH20',title:'Unit 042',kind:'mixed',spikes:6240,snr:'4.2',isi:'3.8',duration:'20',phase:'Cluster review',ai:'DISCARD',risk:'High impact',brief:'Mixed waveforms · check before discarding',summary:'Broad waveform variability suggests a noisy cluster.',rationale:'Illustrative model rationale: the waveform bundle contains several shapes. The proposed action discards the entire cluster without inspecting whether a useful subcluster can be separated.',split:true,seed:42},
   {id:'U-017',channel:'CH03',title:'Unit 017',kind:'split',spikes:3810,snr:'5.1',isi:'2.7',duration:'20',phase:'Cluster review',ai:'SPLIT',risk:'Needs review',brief:'Two waveform families · inspect children',summary:'Two waveform families may be separable in the current tree.',rationale:'Illustrative model rationale: a second waveform family persists across the recording. Inspecting the two available children may help distinguish a mixed cluster from amplitude variation.',split:true,seed:17},
   {id:'P-008',channel:'CH30',title:'Units 008 + 021',kind:'merge',spikes:4890,snr:'6.0',isi:'0.4',duration:'20',phase:'Pair comparison',ai:'MERGE',risk:'High impact',brief:'Similar templates · compare timing evidence',summary:'Similar waveforms suggest that the two clusters may share a source.',rationale:'Illustrative model rationale: the template shapes overlap. Timing and stability should be considered before deciding whether similarity represents one neuron or two distinct units.',split:false,pair:['U-008','U-021'],seed:8},
@@ -18,28 +18,141 @@ const ACTIONS = {
   NOT_MERGE:{label:'Keep separate',icon:'↔',hint:'Keep both clusters separate. This decision does not label either cluster as good or noise.'},
   DEFER:{label:'Defer',icon:'…',hint:'Keep the case unresolved and request additional evidence or expert review.'}
 };
-const STORAGE_KEY = 'spikeagent-human-review-demo-v1';
-let state = {reviews:{},events:[]};
+// Each case owns a separate synthetic recording. Never compare clusters across channels.
+for(const c of DEMO_CASES){
+  c.source=c.pair?c.pair[0]:c.id;
+  c.dataset_id=`synthetic-session04-${c.channel}`;
+  c.phase_id=c.pair?'phase2':'phase1';
+  const number=Number(c.source.slice(2));
+  const ids=c.pair?[c.source,c.pair[1],'U-034']:[c.source,`U-${String(number+1).padStart(3,'0')}`,`U-${String(number+2).padStart(3,'0')}`];
+  c.units=ids.map((id,i)=>({id,cluster_id:Number(id.slice(2)),title:`Cluster ${id.slice(2)}`,
+    channel:c.channel,seed:Number(id.slice(2)),kind:i===0?c.kind:i===1?'clean':'split',
+    spikes:c.pair?[3030,1860,1020][i]:i===0?c.spikes:i===1?1247:25,
+    split:i===0?(c.pair?true:c.split):true,color:['#287e70','#b46d4c','#6665aa'][i]}));
+}
+const Core=ReviewCore;
+let CASES=DEMO_CASES,mode='demo',backend=null,realCatalog=null,revisions={},saving=false;
+let bundleCatalog=[],activeBundle=null,sourceChoice='demo',profileName='';
+const REAL_STORAGE_KEY='spikeagent-human-review-real-v3';
+const realStorageKey=()=>`${REAL_STORAGE_KEY}:${reviewerId}:${activeBundle}`;
+let reviewerId;
+try{reviewerId=localStorage.getItem('spikeagent-reviewer-id');if(!reviewerId){reviewerId=crypto.randomUUID();localStorage.setItem('spikeagent-reviewer-id',reviewerId);}}
+catch{reviewerId='temporary-'+Date.now()+'-'+Math.random().toString(36).slice(2);}
+const STORAGE_KEY = 'spikeagent-human-review-demo-v2';
+let state = {reviews:{},events:[],reasons:[],annotator:''};
 let storageAvailable = true;
+let legacyFeedback=null;
 try {
+  const legacy=localStorage.getItem('spikeagent-human-review-demo-v1');
+  if(legacy){try{legacyFeedback=JSON.parse(legacy);}catch{legacyFeedback={unparsed_storage:legacy};}}
   const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
   if(saved && saved.reviews && typeof saved.reviews==='object' && Array.isArray(saved.events)){
-    state.reviews=Object.fromEntries(Object.entries(saved.reviews).filter(([id,r])=>CASES.some(c=>c.id===id)&&r&&ACTIONS[r.action]&&typeof r.timestamp==='string'));
+    state.reviews=Object.fromEntries(Object.entries(saved.reviews).filter(([id,r])=>{
+      const c=CASES.find(c=>c.id===id);return c&&Core.validStoredReview(c,r);
+    }));
     state.events=saved.events;
+    state.reasons=Array.isArray(saved.reasons)?saved.reasons.filter(r=>r&&typeof r.text==='string'):[];
+    state.annotator=typeof saved.annotator==='string'?saved.annotator:'';
   }
 } catch {storageAvailable=false;}
-let selectedId=CASES[0].id, selectedAction=CASES[0].ai, selectedTab='overview', filter='all', currentView='review';
-let tabsViewed=new Set(['overview']), lastUndoId=null, toastTimeout=null, isDirty=false;
+let demoState=state;
+let selectedId=CASES[0].id, selectedUnitId=CASES[0].source, selectedTab='detail', filter='all', currentView='review';
+let draft={},tabsViewed=new Set(),unitsViewed=new Set(),rationaleViewed=false,rationaleExpanded=false,toastTimeout=null,isDirty=false;
 const $=s=>document.querySelector(s);
 const $$=s=>Array.from(document.querySelectorAll(s));
 const escapeHtml=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const currentCase=()=>CASES.find(c=>c.id===selectedId);
-const allowed=c=>c.pair?['MERGE','NOT_MERGE','DEFER']:['KEEP',...(c.split?['SPLIT']:[]),'DISCARD','DEFER'];
+const allowed=c=>Core.allowed(c);
+const currentUnit=()=>currentCase().units.find(u=>u.id===selectedUnitId);
+const sourceUnit=c=>c.units.find(u=>u.id===c.source);
+const unitLabel=(c,id)=>c.units.find(u=>u.id===id)?.title||'Choose a cluster';
 const dateText=t=>new Date(t).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+let reasonMatches=[],reasonIndex=-1,reasonSequence=0,reasonTimer=null;
+
+async function api(path,body){
+  const headers={'X-Reviewer-ID':reviewerId};
+  if(body!==undefined){headers['Content-Type']='application/json';headers['X-CSRF-Token']=backend.csrf_token;}
+  const response=await fetch(path,{method:body===undefined?'GET':'POST',headers,body:body===undefined?undefined:JSON.stringify(body)});
+  const result=await response.json();
+  if(!response.ok)throw new Error(result.error||`Server error ${response.status}`);
+  return result;
+}
+function connectionWarning(message){$('#backend-warning').textContent=message;$('#backend-warning').hidden=!message;}
+function mergeReasons(reasons){
+  const map=new Map(state.reasons.map(r=>[Core.reasonKey(r.text),r]));
+  for(const r of reasons)map.set(Core.reasonKey(r.text),r);
+  state.reasons=[...map.values()];
+}
+async function connectBackend(){
+  try{
+    backend=await api('/api/status');
+    await refreshDatasetMenu();$('#manage-inputs').disabled=false;
+    const profile=await api('/api/profile');profileName=profile.annotator;
+    if(!profile.updated_at){
+      let previous=null;try{previous=JSON.parse(localStorage.getItem(REAL_STORAGE_KEY)||'null');}catch{}
+      profileName=previous?.annotator||state.annotator||'';
+      if(profileName)await api('/api/profile',{annotator:profileName});
+    }
+    state.annotator=profileName;$('#reviewer-name').value=profileName;
+    if(state.reasons.length)await api('/api/reasons/import',{reasons:state.reasons.slice(0,500).map(r=>r.text)});
+    mergeReasons((await api('/api/reasons')).reasons);renderReasons();
+    if(new URLSearchParams(location.search).get('source')!=='demo'&&bundleCatalog.length){
+      let previous;try{previous=localStorage.getItem('spikeagent-active-bundle');}catch{}
+      await switchSource(bundleCatalog.some(b=>b.id===previous)?choiceForBundle(previous):'real');
+    }
+  }catch(error){
+    connectionWarning(`Real-data backend unavailable: ${error.message}. The synthetic demo is still available.`);
+    $('#data-source').value=sourceChoice;
+  }
+}
+async function switchSource(next,force=false,keepCache=true){
+  const targetBundle=next==='demo'?null:next==='real'?bundleCatalog[0]?.id:next.startsWith('bundle:')?next.slice(7):null;
+  if(saving)return false;
+  if(!force&&next===sourceChoice)return true;
+  $('#data-source').disabled=true;
+  try{
+    if(next!=='demo'){
+      if(!targetBundle)throw new Error('Choose an imported dataset first.');
+      const catalog=await api('/api/cases?bundle_id='+encodeURIComponent(targetBundle));
+      const saved=await api('/api/reviews');
+      const savedReasons=(await api('/api/reasons')).reasons;
+      if(keepCache)persist();if(mode==='demo')demoState=state;
+      realCatalog=catalog;activeBundle=targetBundle;
+      let cachedReal=null;try{cachedReal=JSON.parse(localStorage.getItem(realStorageKey())||'null');}catch{}
+      mode='real';CASES=realCatalog.cases;const ids=new Set(CASES.map(c=>c.id));
+      revisions=Object.fromEntries(Object.entries(saved.revisions).filter(([id])=>ids.has(id)));
+      state={reviews:Object.fromEntries(Object.entries(saved.reviews).filter(([id])=>ids.has(id)).map(([id,r])=>[id,r.review])),events:Array.isArray(cachedReal?.events)?cachedReal.events:[],reasons:demoState.reasons.slice(),annotator:profileName};
+      mergeReasons(savedReasons);
+    }else{persist();mode='demo';CASES=DEMO_CASES;state=demoState;state.annotator=profileName;revisions={};}
+    sourceChoice=next;$('#data-source').value=sourceChoice;
+    $('#data-source').title=mode==='real'?`${realCatalog.dataset_id} · ${realCatalog.source_kind}`:'Synthetic demo';
+    const manual=mode==='real'&&realCatalog.source_kind==='initial';
+    $('#source-badge').textContent=mode==='real'?(manual?'REAL DATA · MANUAL':'SAVED REAL DATA'):'INTERACTIVE MOCKUP';
+    $('#notice-title').textContent=mode==='real'?realCatalog.dataset_id:'Meeting demo';
+    $('#notice-text').textContent=mode==='real'?(manual?'Real MAT initial clusters. No model has run; record your own proposals.':'Real MAT + saved Qwen9B decisions. Reviews are saved on this server; proposed actions do not change the recording.'):'All signals, cases, and AI suggestions are illustrative. Decisions are saved only in this browser.';
+    $('#reset-button').hidden=mode==='real';
+    $('#session-title').textContent=mode==='real'?`${realCatalog.dataset_id.split('_').pop()} · ${manual?'initial clusters':realCatalog.run_status==='completed'?'completed saved run':'incomplete saved run'}`:'Demo recording · Session 04';
+    $('#session-meta').textContent=mode==='real'?`${CASES.length} ${manual?'clusters':'saved steps'} · ${realCatalog.n_spikes.toLocaleString()} spikes`:'6 review cases · synthetic signals';
+    $('#reason-help').textContent=backend?'Saved reasons are shared on this server. Type the first letters; ↑/↓ and Enter choose a match.':'Reasons are remembered in this browser. Type the first letters to see matching reasons.';
+    $('.queue-heading .count').textContent=CASES.length;
+    $('.filters [data-filter="all"] span').textContent=CASES.length;
+    $('.evidence-footer>span:last-child').textContent=mode==='real'?'Real recording · saved pre-decision state':'Synthetic preview · not recorded spikes';
+    $('[data-tab="timing"]').textContent=mode==='real'?'ISI':'Timing';
+    $('[data-tab="stability"]').textContent=mode==='real'?'Amplitude over time':'Drift & location';
+    $('#reviewer-name').value=state.annotator;
+    populateQueueFiles();resetQueueFilters();
+    isDirty=false;selectCase(CASES[0].id,true);showView('review');
+    $$('.workspace>*').forEach(panel=>panel.scrollTop=0);connectionWarning('');
+    if(mode==='real')try{localStorage.setItem('spikeagent-active-bundle',activeBundle);}catch{}
+    return true;
+  }catch(error){connectionWarning(`Could not load the selected source: ${error.message}`);$('#data-source').value=sourceChoice;return false;}
+  finally{$('#data-source').disabled=false;}
+}
 
 function persist(){
-  try{localStorage.setItem(STORAGE_KEY,JSON.stringify(state));}
+  try{localStorage.setItem(mode==='real'?realStorageKey():STORAGE_KEY,JSON.stringify(state));}
   catch{storageAvailable=false;toast('Browser storage unavailable. Export feedback before closing.');}
+  $('#storage-warning').hidden=storageAvailable;
 }
 function toast(message,undoId=null){
   clearTimeout(toastTimeout);
@@ -56,94 +169,203 @@ function showView(view){
   $('#page-name').textContent={review:'Expert review',history:'Feedback history',revisions:'Workflow revisions'}[view];
   history.replaceState(null,'',`#${view}`);
   if(view==='history')renderHistory();
+  if(view==='review')syncPlotTypography();
+}
+function queueFile(c){
+  const path=c.mat_path||(c.synthetic===false&&c.dataset_id===realCatalog?.dataset_id?realCatalog.provenance.mat_path:null);
+  return {key:`${c.dataset_id}:${path||'synthetic'}`,name:path?path.split(/[\\/]/).pop():`Synthetic · ${c.channel}`,dataset:c.dataset_id,path};
+}
+function populateQueueFiles(){
+  const files=new Map();
+  for(const c of CASES){const file=queueFile(c);if(!files.has(file.key))files.set(file.key,{...file,count:0});files.get(file.key).count++;}
+  $('#file-filter').innerHTML='<option value="all">All files</option>'+[...files.values()].map(f=>`<option value="${escapeHtml(f.key)}">${escapeHtml(f.name)} · ${escapeHtml(f.dataset)} (${f.count})</option>`).join('');
+}
+function queueScope(){
+  const query=$('#case-search').value.toLowerCase().trim(),file=$('#file-filter').value,phase=$('#phase-filter').value;
+  return CASES.filter(c=>{
+    const f=queueFile(c);
+    return (file==='all'||f.key===file)&&(phase==='all'||c.phase_id===phase)&&
+      `${c.id} ${c.channel} ${c.title} ${c.brief} ${f.name} ${f.dataset} ${f.path||''}`.toLowerCase().includes(query);
+  });
+}
+function resetQueueFilters(){
+  filter='all';$('#case-search').value='';$('#file-filter').value='all';$('#phase-filter').value='all';
+  $$('[data-filter]').forEach(b=>b.classList.toggle('active',b.dataset.filter==='all'));renderQueue();
 }
 function renderQueue(){
-  const query=$('#case-search').value.toLowerCase().trim();
-  const visible=CASES.filter(c=>(`${c.id} ${c.channel} ${c.title}`.toLowerCase().includes(query))&&(filter==='all'||(filter==='reviewed'?!!state.reviews[c.id]:!state.reviews[c.id])));
-  $('#case-list').innerHTML=visible.length?visible.map(c=>`<button class="case-item ${c.id===selectedId?'active':''}" data-case="${c.id}" aria-pressed="${c.id===selectedId}"><div class="case-item-top"><strong>${escapeHtml(c.title)}</strong><span class="mini-channel">${c.channel}</span></div><p>${escapeHtml(c.brief)}</p><div class="case-item-bottom">${state.reviews[c.id]?`<span class="reviewed-check">✓ ${escapeHtml(ACTIONS[state.reviews[c.id].action].label)} recorded</span>`:`<span class="risk ${c.risk==='High impact'?'high':c.risk==='Routine'?'low':''}">${c.risk}</span>`}<span class="case-arrow">${c.id===selectedId?'→':'›'}</span></div></button>`).join(''):'<p class="no-results">No cases match this filter.</p>';
+  const scope=queueScope();
+  const visible=scope.filter(c=>filter==='all'||(filter==='reviewed'?!!state.reviews[c.id]:!state.reviews[c.id]));
+  const groups=new Map();
+  for(const c of visible){const file=queueFile(c);if(!groups.has(file.key))groups.set(file.key,{file,cases:[]});groups.get(file.key).cases.push(c);}
+  const caseButton=c=>`<button class="case-item ${c.id===selectedId?'active':''}" data-case="${c.id}" aria-pressed="${c.id===selectedId}"><div class="case-item-top"><strong>${c.synthetic===false&&c.review_mode!=='manual'?`Step ${c.step_number} · `:''}${escapeHtml(sourceUnit(c).title)}</strong><span class="mini-channel">${c.channel}</span></div><p>n = ${sourceUnit(c).spikes.toLocaleString()} · ${escapeHtml(c.brief)}</p><div class="case-item-bottom">${state.reviews[c.id]?`<span class="reviewed-check">✓ ${escapeHtml(ACTIONS[state.reviews[c.id].action].label)} recorded</span>`:`<span class="risk ${c.risk==='High impact'?'high':c.risk==='Routine'?'low':''}">${c.risk}</span>`}<span class="case-arrow">${c.id===selectedId?'→':'›'}</span></div></button>`;
+  $('#case-list').innerHTML=visible.length?[...groups.values()].map(({file,cases})=>`<section class="queue-file-group" aria-label="${escapeHtml(file.dataset)}"><header class="queue-file-heading"><strong>${escapeHtml(file.name)}</strong><span class="file-case-count">${cases.length} ${cases.length===1?'case':'cases'}</span><span class="queue-dataset-id">${escapeHtml(file.dataset)}</span></header>${cases.map(caseButton).join('')}</section>`).join(''):'<p class="no-results">No cases match these filters.</p>';
   $$('[data-case]').forEach(b=>b.onclick=()=>selectCase(b.dataset.case));
+  $('.queue-heading .count').textContent=visible.length;
+  $('.filters [data-filter="all"] span').textContent=scope.length;
+  const scopeReviewed=scope.filter(c=>state.reviews[c.id]).length;
+  $('#reviewed-count').textContent=scopeReviewed;$('#pending-count').textContent=scope.length-scopeReviewed;
+  $('#queue-result-summary').textContent=`${visible.length} / ${CASES.length} cases${visible.some(c=>c.id===selectedId)?'':' · current case outside filter'}`;
+  $('#clear-queue-filters').hidden=!($('#file-filter').value!=='all'||$('#phase-filter').value!=='all'||$('#case-search').value||filter!=='all');
   const count=Object.keys(state.reviews).length;
-  $('#reviewed-count').textContent=count;$('#pending-count').textContent=CASES.length-count;
   $('#progress-text').textContent=`${count} of ${CASES.length} reviewed`;
   $('#progress-percent').textContent=`${Math.round(count/CASES.length*100)}%`;
   $('#progress-bar').style.width=`${count/CASES.length*100}%`;
 }
 function selectCase(id,force=false){
+  if(saving)return;
   if(!force&&isDirty&&id!==selectedId){showUnsaved(id);return;}
-  selectedId=id;selectedTab='overview';tabsViewed=new Set(['overview']);isDirty=false;
+  if(!CASES.some(c=>c.id===id))return;
+  selectedId=id;selectedTab='detail';tabsViewed=new Set();unitsViewed=new Set();rationaleViewed=false;rationaleExpanded=false;isDirty=false;
   const c=currentCase(),review=state.reviews[id];
-  selectedAction=review?review.action:allowed(c).includes(c.ai)?c.ai:null;
-  $('#reason-select').value=review?.reason||'';$('#review-note').value=review?.note||'';
+  selectedUnitId=c.source;
+  draft={agree:review?review.expert_agree:null,action:review?review.action:c.review_mode==='manual'?'KEEP':allowed(c).includes(c.ai)?c.ai:null,
+    target:review&&review.expert_merge_target!==null?c.units.find(u=>u.cluster_id===review.expert_merge_target)?.id:c.pair?.[1]||'',
+    reason:review?.expert_reason||'',note:review?.expert_note||'',positive:review?.expert_positive_comment||'',
+    disagreement_types:(review?.disagreement_types||[]).filter(t=>['rationale','evidence'].includes(t))};
+  $('#reason-select').value=draft.reason;$('#review-note').value=draft.note;$('#positive-comment').value=draft.positive;
+  $('#disagree-rationale').checked=draft.disagreement_types.includes('rationale');
+  $('#disagree-evidence').checked=draft.disagreement_types.includes('evidence');
   $('#form-error').textContent='';
-  renderQueue();renderCase();
+  hideReasonMatches();
+  renderReasons();renderQueue();recordEvidence();renderCase();
 }
 function renderCase(){
-  const c=currentCase();
-  $('#case-channel').textContent=`${c.channel} / ${c.phase.toUpperCase()} / DEMO CASE`;
-  $('#case-title').textContent=c.title;
+  const c=currentCase(),u=currentUnit();
+  $('#case-channel').textContent=c.synthetic===false?`${c.dataset_id} / ${c.step_id} / ${c.phase_id.toUpperCase()}`:`${c.channel} / ${c.phase.toUpperCase()} / DEMO CASE`;
+  $('#case-title').textContent=u.title;
   $('#case-badges').innerHTML=`<span class="pill">${c.pair?'Pair review':'Single cluster'}</span><span class="pill ${c.risk==='High impact'?'amber':'teal'}">${state.reviews[c.id]?'Reviewed':c.risk}</span>`;
   $('#metrics').innerHTML=[
-    ['Spike count',c.spikes.toLocaleString(),''],
-    ['Signal / noise',c.snr,''],
-    ['ISI violations',c.isi,'%',parseFloat(c.isi)>2],
-    ['Recording',c.duration,'min']
+    ['Cluster spikes',u.spikes.toLocaleString(),''],
+    [c.review_mode==='manual'?'Reviewer traces':c.synthetic===false?'Saved source traces':'Displayed traces',String(c.displayed_trace_count??24),''],
+    ['Recording clusters',String(c.units.length),''],
+    ['Evidence',c.synthetic===false?'Real MAT':'Synthetic','']
   ].map(([label,value,unit,warn])=>`<div class="metric ${warn?'warn':''}"><span>${label}</span><strong>${value}<small>${unit}</small></strong></div>`).join('');
-  $('#suggestion').innerHTML=`<div class="suggestion-card"><div class="suggestion-label">✧ AI suggestion <span style="margin-left:auto;font-size:7px">SCRIPTED DEMO</span></div><div class="suggestion-action"><strong>${ACTIONS[c.ai].label}${c.pair?' pair':''}</strong><span>Review requested</span></div><p>${c.summary}</p><button class="show-rationale" id="rationale-button" aria-expanded="false">Show reasoning</button><p class="rationale" id="rationale-text" hidden>${c.rationale}</p></div>`;
-  $('#rationale-button').onclick=()=>{
+  $('#review-object').textContent=`Review object: ${sourceUnit(c).title}${c.pair?' + '+unitLabel(c,c.pair[1]):''}`;
+  $('#suggestion').innerHTML=c.review_mode==='manual'?'<div class="suggestion-card"><div class="suggestion-label">MANUAL REVIEW</div><p>No model decision exists for these initial clusters. Inspect the real data and record your proposal.</p></div>':`<div class="suggestion-card"><div class="suggestion-label">${c.synthetic===false?'Qwen3.5-9B · SAVED RESPONSE':'Agent 1 · SCRIPTED DEMO'}</div><div class="suggestion-action"><strong>${ACTIONS[c.ai].label}${c.pair?' '+sourceUnit(c).title+' + '+unitLabel(c,c.pair[1]):' '+sourceUnit(c).title}</strong></div><p>${escapeHtml(c.summary)}</p><button class="show-rationale" id="rationale-button" aria-expanded="${rationaleExpanded}">${rationaleExpanded?'Hide':'Show'} rationale</button><p class="rationale" id="rationale-text" ${rationaleExpanded?'':'hidden'}>${escapeHtml(c.rationale)}</p></div>`;
+  if($('#rationale-button'))$('#rationale-button').onclick=()=>{
     const el=$('#rationale-text');el.hidden=!el.hidden;
-    $('#rationale-button').textContent=el.hidden?'Show reasoning':'Hide reasoning';
+    rationaleExpanded=!el.hidden;
+    $('#rationale-button').textContent=el.hidden?'Show rationale':'Hide rationale';
     $('#rationale-button').setAttribute('aria-expanded',String(!el.hidden));
+    if(!el.hidden){rationaleViewed=true;state.events.push({type:'ai_rationale_viewed',case_id:c.id,timestamp:new Date().toISOString(),synthetic:c.synthetic!==false});persist();}
   };
-  $('#validity-warning').innerHTML=c.kind==='leaf'?'<div class="warning"><strong>SPLIT is unavailable.</strong><br>This is a leaf node. Select a valid action or defer the case.</div>':'';
+  $('#validity-warning').innerHTML=!sourceUnit(c).split&&c.ai==='SPLIT'?'<div class="warning"><strong>SPLIT is unavailable.</strong><br>This is a leaf node. Select a valid action or defer the case.</div>':'';
   renderActions();renderEvidence();
 }
 function renderActions(){
-  const c=currentCase(), actions=c.pair?['MERGE','NOT_MERGE','DEFER']:['KEEP','SPLIT','DISCARD','DEFER'];
-  $('#action-grid').innerHTML=actions.map(a=>`<button type="button" class="action-option ${selectedAction===a?'selected':''}" data-action="${a}" aria-pressed="${selectedAction===a}" ${!allowed(c).includes(a)?'disabled title="No child clusters are available"':''}><span class="action-icon" aria-hidden="true">${ACTIONS[a].icon}</span><span>${ACTIONS[a].label}</span><span class="radio" aria-hidden="true"></span></button>`).join('');
-  $$('[data-action]').forEach(b=>b.onclick=()=>{selectedAction=b.dataset.action;isDirty=true;$('#form-error').textContent='';renderActions();});
-  $('#action-context').innerHTML=`<p class="action-hint">${selectedAction?ACTIONS[selectedAction].hint:'The proposed action is unavailable. Choose an action above.'}</p>`;
-  const correction=selectedAction&&selectedAction!==c.ai;
-  $('#required-indicator').textContent=correction?'reason or note required':'optional';
-  $('#decision-preview').innerHTML=selectedAction?`${correction?`<strong>Correction:</strong> ${ACTIONS[c.ai].label} → ${ACTIONS[selectedAction].label}.`:`<strong>Accept suggestion:</strong> ${ACTIONS[selectedAction].label}.`} Saved with this evidence snapshot. No real data will be changed.`:'Choose a valid action to continue.';
-  $('#save-button').disabled=!selectedAction;
+  const c=currentCase(),actions=['KEEP','SPLIT','DISCARD','MERGE',...(c.pair?['NOT_MERGE']:[]),'DEFER'];
+  const manual=c.review_mode==='manual';
+  $('.agreement-fieldset').hidden=manual;$('.disagreement-details').hidden=manual;
+  $('#agree-button').disabled=!allowed(c).includes(c.ai);
+  for(const [id,value] of [['agree-button',true],['disagree-button',false]]){
+    $('#'+id).classList.toggle('selected',draft.agree===value);$('#'+id).setAttribute('aria-pressed',String(draft.agree===value));
+  }
+  $('#correction-panel').hidden=!manual&&draft.agree!==false;$('#positive-panel').hidden=manual?draft.action!=='KEEP':draft.agree!==true;
+  $('#action-grid').innerHTML=actions.map(a=>`<button type="button" class="action-option ${draft.action===a?'selected':''}" data-action="${a}" aria-pressed="${draft.action===a}" ${!allowed(c).includes(a)?'disabled title="No child clusters are available"':''}><span class="action-icon" aria-hidden="true">${ACTIONS[a].icon}</span><span>${ACTIONS[a].label}</span><span class="radio" aria-hidden="true"></span></button>`).join('');
+  $$('[data-action]').forEach(b=>b.onclick=()=>{draft.action=b.dataset.action;isDirty=true;$('#form-error').textContent='';renderActions();renderEvidence();});
+  $('#merge-controls').hidden=draft.action!=='MERGE';
+  $('#merge-source').textContent=`Source: ${sourceUnit(c).title} · n = ${sourceUnit(c).spikes.toLocaleString()}`;
+  $('#merge-target').innerHTML='<option value="">Choose a target cluster…</option>'+Core.candidates(c).map(u=>`<option value="${u.id}">${u.title} · n = ${u.spikes.toLocaleString()}</option>`).join('');
+  $('#merge-target').value=draft.target||'';
+  const realHints={SPLIT:'Record a split proposal for this checkpoint. Spike assignments are unchanged.',MERGE:'Record a merge proposal for the selected pair. Spike assignments are unchanged.'};
+  $('#action-context').innerHTML=`<p class="action-hint">${draft.action?(c.synthetic===false&&realHints[draft.action]||ACTIONS[draft.action].hint):''}</p>`;
+  const pair=draft.action==='MERGE'?` → ${escapeHtml(unitLabel(c,draft.target))}`:'';
+  $('#decision-preview').innerHTML=manual?`Manual proposal: ${ACTIONS[draft.action]?.label||'Choose an action'}${pair}. No spike assignments change.`:draft.agree===null?'Choose Agree or Disagree to record your judgment.':`<strong>${draft.agree?'Agree':'Disagree'}:</strong> ${draft.action?ACTIONS[draft.action].label:'Choose an action'}${pair}. ${draft.action==='DEFER'?'Deferred is a review status, not a backend action.':'Expert proposal only; no spike assignments change.'}`;
+  $('#save-button').disabled=saving||(!manual&&draft.agree===null)||!draft.action;
+  $('.reason-section>label[for="reason-select"] span').textContent=manual&&draft.action==='KEEP'?'optional for KEEP':'reason or note required';
   $('#save-button').innerHTML=`${state.reviews[c.id]?'Update review & next':'Save review & next'} <span aria-hidden="true">→</span>`;
 }
-function saveReview(){
+function setAgreement(agree){
+  const c=currentCase();draft.agree=c.review_mode==='manual'?null:agree;isDirty=true;$('#form-error').textContent='';
+  if(c.review_mode==='manual'){renderActions();renderEvidence();return;}
+  if(agree){draft.action=c.ai;draft.target=c.pair?.[1]||'';draft.disagreement_types=[];$('#disagree-rationale').checked=false;$('#disagree-evidence').checked=false;}
+  else if(!allowed(c).includes(draft.action))draft.action='KEEP';
+  renderActions();renderEvidence();
+}
+function renderReasons(){
+  $('#reason-options').innerHTML=state.reasons.map(r=>`<option value="${escapeHtml(r.text)}"></option>`).join('');
+}
+function hideReasonMatches(){reasonSequence++;clearTimeout(reasonTimer);$('#reason-suggestions').hidden=true;$('#reason-select').setAttribute('aria-expanded','false');$('#reason-select').removeAttribute('aria-activedescendant');reasonIndex=-1;}
+function showReasonMatches(){
+  const input=$('#reason-select'),prefix=input.value;
+  reasonMatches=Core.matchReasons(state.reasons,prefix).slice(0,20);reasonIndex=-1;
+  $('#reason-suggestions').innerHTML=reasonMatches.map((r,i)=>`<button type="button" role="option" aria-selected="false" tabindex="-1" id="reason-option-${i}" data-reason-index="${i}"><span>${escapeHtml(r.text)}</span><small>${r.uses?`Used ${r.uses}×`:backend?'Saved on server':'Previously used'}</small></button>`).join('');
+  const open=reasonMatches.length>0&&!$('#correction-panel').hidden&&document.activeElement===input;
+  $('#reason-suggestions').hidden=!open;input.setAttribute('aria-expanded',String(open));input.removeAttribute('aria-activedescendant');
+  $$('[data-reason-index]').forEach(b=>{b.onpointerdown=e=>e.preventDefault();b.onclick=()=>chooseReason(Number(b.dataset.reasonIndex));});
+}
+function chooseReason(index){
+  if(!reasonMatches[index])return;
+  $('#reason-select').value=reasonMatches[index].text;isDirty=true;$('#form-error').textContent='';hideReasonMatches();$('#reason-select').focus();
+}
+function queryReasons(){
+  const sequence=++reasonSequence,prefix=$('#reason-select').value;
+  showReasonMatches();clearTimeout(reasonTimer);
+  if(backend)reasonTimer=setTimeout(async()=>{
+    try{const result=await api('/api/reasons?prefix='+encodeURIComponent(prefix));if(sequence!==reasonSequence)return;mergeReasons(result.reasons);renderReasons();showReasonMatches();}
+    catch{ /* The input and remembered local matches remain usable offline. */ }
+  },120);
+}
+async function saveReview(){
+  if(saving)return;
   const c=currentCase();
-  if(!selectedAction||!allowed(c).includes(selectedAction)){ $('#form-error').textContent='Choose an available action.';return; }
-  const reason=$('#reason-select').value,note=$('#review-note').value.trim();
-  if(selectedAction!==c.ai&&!reason&&!note){
-    $('#form-error').textContent='Add a reason or note for your correction.';$('#reason-select').focus();return;
-  }
-  const review={case_id:c.id,channel:c.channel,ai_action:c.ai,action:selectedAction,reason,note,timestamp:new Date().toISOString(),evidence_id:`synthetic-${c.id}-v1`,viewed_tabs:[...tabsViewed],additional_evidence_viewed:tabsViewed.has('stability'),synthetic:true};
+  draft.reason=$('#reason-select').value;draft.note=$('#review-note').value;draft.positive=$('#positive-comment').value;
+  const error=Core.validate(c,draft);
+  if(error){$('#form-error').textContent=error;return;}
+  const context={viewed_cluster_ids:[...unitsViewed],visible_cluster_ids:visibleUnits(),viewed_tabs:[...tabsViewed],rationale_viewed:rationaleViewed,annotator:state.annotator};
+  let review;
+  if(mode==='real'){
+    saving=true;$('.decision-panel').inert=true;renderActions();$('#save-button').textContent='Saving to server…';
+    try{const result=await api('/api/reviews',{case_id:c.id,draft:{...draft},context,expected_revision:revisions[c.id]||0,request_id:crypto.randomUUID()});review=result.review;revisions[c.id]=result.revision;connectionWarning('');}
+    catch(error){$('#form-error').textContent=`Not saved: ${error.message}`;saving=false;$('.decision-panel').inert=false;renderActions();return;}
+    saving=false;$('.decision-panel').inert=false;
+  }else review=Core.buildReview(c,draft,context);
   state.reviews[c.id]=review;
   state.events.push({type:'review_saved',...review});
-  persist();isDirty=false;lastUndoId=c.id;
+  if(!draft.agree)state.reasons=Core.rememberReason(state.reasons,review.expert_reason,{case_id:c.id,timestamp:review.timestamp,provenance:mode==='real'?'reviewer-entered-real-review':'reviewer-entered-in-synthetic-demo'});
+  if(backend&&mode==='demo'&&review.expert_reason)api('/api/reasons/import',{reasons:[review.expert_reason]}).catch(()=>connectionWarning('Reason is saved in this browser; server sync failed.'));
+  persist();isDirty=false;
   renderQueue();
   const index=CASES.findIndex(x=>x.id===c.id);
-  const next=[...CASES.slice(index+1),...CASES.slice(0,index)].find(x=>!state.reviews[x.id]);
+  const inScope=new Set(queueScope().map(x=>x.id));
+  const next=filter==='reviewed'?null:[...CASES.slice(index+1),...CASES.slice(0,index)].find(x=>inScope.has(x.id)&&!state.reviews[x.id]);
   if(next)selectCase(next.id,true);
-  else {renderCase();showView('history');}
-  toast(`${c.title}: ${ACTIONS[review.action].label} saved.`,c.id);
+  else {renderCase();if(CASES.every(x=>state.reviews[x.id]))showView('history');}
+  toast(`${sourceUnit(c).title}: ${ACTIONS[review.action].label} saved.`,c.id);
 }
-function undoReview(id){
+async function undoReview(id,force=false){
+  if(saving)return;
+  if(isDirty&&!force){showUnsaved(id,()=>undoReview(id,true));return;}
   if(!state.reviews[id])return;
-  state.events.push({type:'review_undone',case_id:id,previous_review:state.reviews[id],timestamp:new Date().toISOString(),synthetic:true});
-  delete state.reviews[id];persist();lastUndoId=null;
+  if(mode==='real'){
+    saving=true;$('.decision-panel').inert=true;
+    try{const result=await api('/api/reviews/undo',{case_id:id,expected_revision:revisions[id]||0,request_id:crypto.randomUUID()});revisions[id]=result.revision;}
+    catch(error){toast(`Undo failed: ${error.message}`);saving=false;$('.decision-panel').inert=false;return;}
+    saving=false;$('.decision-panel').inert=false;
+  }
+  state.events.push({type:'review_undone',case_id:id,previous_review:state.reviews[id],timestamp:new Date().toISOString(),synthetic:mode!=='real'});
+  delete state.reviews[id];persist();
   selectCase(id,true);renderHistory();showView('review');toast('Review undone. The case is back in the queue.');
 }
 function renderHistory(){
   const reviews=Object.values(state.reviews).sort((a,b)=>b.timestamp.localeCompare(a.timestamp));
-  const corrected=reviews.filter(r=>r.action!==r.ai_action).length;
-  $('#history-stats').innerHTML=[['Reviewed',reviews.length],['Suggestions accepted',reviews.length-corrected],['Suggestions corrected',corrected],['Deferred',reviews.filter(r=>r.action==='DEFER').length]].map(([name,n])=>`<div class="stat-card"><span>${name}</span><strong>${n.toString().padStart(2,'0')}</strong></div>`).join('');
-  $('#history-list').innerHTML=reviews.length?`<table class="history-table"><thead><tr><th>Case</th><th>AI suggestion</th><th>Your action</th><th>Reason / note</th><th>Time</th><th></th></tr></thead><tbody>${reviews.map(r=>`<tr><td><strong>${escapeHtml(r.case_id)}</strong><small>${escapeHtml(r.channel)} · synthetic</small></td><td>${ACTIONS[r.ai_action]?.label||'Unknown'}</td><td><span class="pill ${r.action===r.ai_action?'teal':'amber'}">${ACTIONS[r.action].label}</span><small>${r.action===r.ai_action?'Accepted':'Corrected'}</small></td><td>${escapeHtml(r.reason||'No reason added')}<small>${escapeHtml(r.note)}</small></td><td class="mono">${dateText(r.timestamp)}</td><td><button class="text-button" data-undo="${escapeHtml(r.case_id)}">Undo</button></td></tr>`).join('')}</tbody></table>`:'<div class="empty-state"><div class="empty-icon">✓</div><h3>Your first review starts the record.</h3><p>Accept a suggestion or make a correction in the workspace.</p><button class="button" id="empty-review">Open review workspace →</button></div>';
+  const corrected=reviews.filter(r=>r.expert_agree===false).length;
+  $('#history-stats').innerHTML=[['Reviewed',reviews.length],['Suggestions accepted',reviews.filter(r=>r.expert_agree===true).length],['Suggestions corrected',corrected],['Deferred',reviews.filter(r=>r.action==='DEFER').length]].map(([name,n])=>`<div class="stat-card"><span>${name}</span><strong>${n.toString().padStart(2,'0')}</strong></div>`).join('');
+  const pairText=(r,which)=>r[which+'_pair']?' · '+r[which+'_pair'].join(' + '):'';
+  $('#history-list').innerHTML=(legacyFeedback?'<p class="legacy-note">Older v1 feedback is preserved and included separately in your JSON export.</p>':'')+(reviews.length?`<table class="history-table"><thead><tr><th>Case</th><th>AI suggestion</th><th>Your judgment</th><th>Reason / comment</th><th>Time</th><th></th></tr></thead><tbody>${reviews.map(r=>`<tr><td><strong>${escapeHtml(r.case_id)}</strong><small>${escapeHtml(r.dataset_id)}</small></td><td>${ACTIONS[r.ai_action]?.label||'No model decision'}${pairText(r,'ai')}</td><td><span class="pill ${r.expert_agree?'teal':'amber'}">${ACTIONS[r.action].label}${pairText(r,'expert')}</span><small>${r.review_mode==='manual'?'Manual proposal':r.expert_agree?'Agreed':'Disagreed'}${r.disagreement_types.length?' · '+escapeHtml(r.disagreement_types.join(', ')):''}</small></td><td>${escapeHtml(r.expert_reason||r.expert_positive_comment||'No comment')}<small>${escapeHtml(r.expert_note)}</small></td><td class="mono">${dateText(r.timestamp)}</td><td><button class="text-button" data-undo="${escapeHtml(r.case_id)}">Undo</button></td></tr>`).join('')}</tbody></table>`:'<div class="empty-state"><div class="empty-icon">✓</div><h3>Your first review starts the record.</h3><p>Record a proposal or review a model suggestion in the workspace.</p><button class="button" id="empty-review">Open review workspace →</button></div>');
+  $('#view-history .section-title>.pill').textContent=mode==='real'?'Saved on server':'Browser-local';
   $$('[data-undo]').forEach(b=>b.onclick=()=>undoReview(b.dataset.undo));
   if($('#empty-review'))$('#empty-review').onclick=()=>showView('review');
 }
-function exportFeedback(){
-  const payload={schema:'spikeagent-human-interface-mockup-v1',synthetic:true,notice:'Illustrative interface data. Not experimental results. No real model or spike curation operations were performed.',exported_at:new Date().toISOString(),reviews:Object.values(state.reviews),events:state.events};
+async function exportFeedback(){
+  let payload={schema:Core.SCHEMA,synthetic:true,notice:'Illustrative feedback only. No model or spike curation operations were performed. Null hashes mean no real experiment provenance exists.',exported_at:new Date().toISOString(),reviews:Object.values(state.reviews),events:state.events,reason_library:state.reasons,
+    legacy_v1:legacyFeedback,legacy_notice:legacyFeedback?'Preserved original v1 data; not reinterpreted as v2 annotations.':null};
+  if(mode==='real'){
+    try{payload=await api('/api/export');payload.browser_exposure_events=state.events;payload.active_dataset_provenance=realCatalog.provenance;}
+    catch(error){toast(`Server export failed: ${error.message}`);return;}
+  }
   const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');
-  a.href=url;a.download='spikeagent-demo-feedback.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  a.href=url;a.download=mode==='real'?'spikeagent-feedback-v3.json':'spikeagent-demo-feedback-v2.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
   toast(`Exported ${payload.reviews.length} review${payload.reviews.length===1?'':'s'} and the event history.`);
 }
 
@@ -157,23 +379,209 @@ function axes(w,h,xLabel,yLabel,xLabels,yLabels){
   markup+=`<text class="axis-label" x="${l+iw/2}" y="${h-2}" text-anchor="middle">${xLabel}</text><text class="axis-label" x="3" y="10">${yLabel}</text>`;
   return {markup,l,t,iw,ih};
 }
-function waveform(c){
-  const w=610,h=218,{markup,l,t,iw,ih}=axes(w,h,'Time (ms)','µV',['−0.5','0','0.5','1.0','1.5'],['50','0','−50','−100','−150']);
-  const random=rng(c.seed),mixed=['mixed','split','merge'].includes(c.kind),noise=c.kind==='noise',center=t+ih*.25;
-  const f=(x,second=false)=>{let shift=second?.025:0;return -1.12*Math.exp(-Math.pow((x-.43-shift)/.048,2))+.42*Math.exp(-Math.pow((x-.53-shift)/.08,2))+.08*Math.exp(-Math.pow((x-.32)/.045,2));};
-  let lines='';
-  for(let k=0;k<48;k++){
-    const second=mixed&&k>25,amp=(noise?.21:second?.52:.88)+(random()-.5)*(noise?.3:.28);
-    const points=Array.from({length:120},(_,i)=>{
-      const x=i/119,wiggle=(random()-.5)*(noise?19:3.8);
-      return `${(l+x*iw).toFixed(1)},${(center-f(x,second)*amp*ih*.60+wiggle).toFixed(1)}`;
-    }).join(' ');
-    lines+=`<polyline points="${points}" fill="none" stroke="${second?'#c88972':'#62a99b'}" stroke-opacity="${noise?.22:.18}" stroke-width=".9"/>`;
+function templateValue(u,x){
+  const shift=(u.seed%7-3)*.007,scale=u.kind==='noise'?.28:.68+(u.seed%5)*.07;
+  return scale*(-125*Math.exp(-Math.pow((x-.43-shift)/.05,2))+45*Math.exp(-Math.pow((x-.54-shift)/.085,2)));
+}
+function tracePoints(u,box,offset=()=>0){
+  return Array.from({length:120},(_,i)=>{
+    const x=i/119,y=templateValue(u,x)+offset(x);
+    return `${(box.l+x*box.iw).toFixed(1)},${(box.t+(60-y)/220*box.ih).toFixed(1)}`;
+  }).join(' ');
+}
+function waveform(u,thumbnail=false){
+  if(currentCase().synthetic===false)return realWaveform([u],thumbnail);
+  const w=610,h=218,box=axes(w,h,'Time (ms)','Source units',['−0.5','0','0.5','1.0','1.5'],['60','5','−50','−105','−160']);
+  const random=rng(u.seed);let lines='';
+  if(!thumbnail)for(let k=0;k<24;k++){
+    const spread=['mixed','split'].includes(u.kind)?12:3;
+    lines+=`<polyline points="${tracePoints(u,box,()=>((random()-.5)*spread))}" fill="none" stroke="${u.color}" stroke-opacity=".15" stroke-width="1"/>`;
   }
-  const avg=second=>Array.from({length:140},(_,i)=>`${(l+i/139*iw).toFixed(1)},${(center-f(i/139,second)*(noise?.21:second?.52:.88)*ih*.60).toFixed(1)}`).join(' ');
-  lines+=`<polyline points="${avg(false)}" fill="none" stroke="#33897c" stroke-width="1.8"/>`;
-  if(mixed)lines+=`<polyline points="${avg(true)}" fill="none" stroke="#bf8b72" stroke-width="1.6"/>`;
-  return `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Synthetic waveform traces for ${c.title}">${markup}${lines}</svg>`;
+  lines+=`<polyline points="${tracePoints(u,box)}" fill="none" stroke="${u.color}" stroke-width="2"/>`;
+  return `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Synthetic waveform for ${u.title}">${box.markup}${lines}</svg>`;
+}
+function visibleUnits(){
+  const c=currentCase();
+  if(['overview','gallery'].includes(selectedTab))return c.units.map(u=>u.id);
+  if(selectedTab==='timing'&&c.pair&&selectedUnitId===c.source)return c.pair;
+  return [selectedUnitId];
+}
+function recordEvidence(){
+  tabsViewed.add(selectedTab);visibleUnits().forEach(id=>unitsViewed.add(id));
+  state.events.push({type:'evidence_viewed',case_id:selectedId,tab:selectedTab,
+    cluster_ids:visibleUnits().map(id=>currentCase().units.find(u=>u.id===id).cluster_id),
+    timestamp:new Date().toISOString(),synthetic:currentCase().synthetic!==false});persist();
+}
+function inspectUnit(id){
+  if(!currentCase().units.some(u=>u.id===id))return;
+  selectedUnitId=id;selectedTab='detail';recordEvidence();renderCase();
+}
+function clusterTags(u){
+  const c=currentCase(),tags=[];
+  if(c.review_mode!=='manual'&&(c.pair||[c.source]).includes(u.id))tags.push('AI');
+  if(u.id===c.source)tags.push('Review object');
+  if(u.id===selectedUnitId)tags.push('Inspected');
+  if(draft.action==='MERGE'&&u.id===draft.target)tags.push('Expert target');
+  return tags.map(t=>`<span class="cluster-tag ${t==='AI'?'ai-tag':'human-tag'}">${t}</span>`).join('');
+}
+function allWaveforms(){
+  if(currentCase().synthetic===false){
+    const legend=currentCase().units.map(u=>`<button class="cluster-legend" data-inspect="${u.id}"><i style="background:${u.color}"></i><strong>${u.title}</strong><span>n = ${u.spikes.toLocaleString()}</span>${clusterTags(u)}</button>`).join('');
+    return plotCard('All active clusters · real checkpoint','Means of all member spikes · shared axes',realWaveform(currentCase().units,true)+`<div class="cluster-legends">${legend}</div>`);
+  }
+  const c=currentCase(),w=610,h=250,box=axes(w,h,'Time (ms)','Source units',['−0.5','0','0.5','1.0','1.5'],['60','5','−50','−105','−160']);
+  const lines=c.units.map(u=>`<polyline data-waveform-cluster="${u.id}" points="${tracePoints(u,box)}" fill="none" stroke="${u.color}" stroke-width="${u.id===selectedUnitId||u.id===draft.target?3:1.8}"/>`).join('');
+  const legend=c.units.map(u=>`<button class="cluster-legend" data-inspect="${u.id}"><i style="background:${u.color}"></i><strong>${u.title}</strong><span>n = ${u.spikes.toLocaleString()}</span>${clusterTags(u)}</button>`).join('');
+  return plotCard('All clusters · same synthetic recording','Shared axes · illustrative means',`<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="All cluster waveforms on shared axes">${box.markup}${lines}</svg><div class="cluster-legends">${legend}</div>`);
+}
+function gallery(){
+  return `<div class="cluster-gallery">${currentCase().units.map(u=>`<div class="thumbnail-card"><div class="thumbnail-heading"><strong>${u.title}</strong><span>n = ${u.spikes.toLocaleString()}</span></div><div class="thumbnail-viewport"><button class="cluster-thumbnail ${u.id===selectedUnitId?'inspected':''}" data-inspect="${u.id}" aria-label="Inspect ${u.title}">${waveform(u,true)}</button><button class="thumbnail-expand" data-expand-unit="${u.id}" aria-label="Expand ${u.title} waveform" title="Expand waveform">⤢</button></div><div class="thumbnail-meta"><div class="cluster-tags">${clusterTags(u)}</div><small>${currentCase().synthetic===false?'Real mean · all member spikes':'Illustrative mean'} · click for detail</small></div></div>`).join('')}</div>`;
+}
+function tickLabel(value){return Math.abs(value)>=1000?value.toFixed(0):Number(value.toPrecision(3)).toString();}
+function realWaveform(units,meanOnly=false){
+  const available=units.filter(u=>u.waveform);
+  if(!available.length)return '<p class="tree-note">Waveform is loading.</p>';
+  const w=610,h=250,xs=available[0].waveform.x_ms;
+  let low=Infinity,high=-Infinity;
+  for(const u of available)for(const values of meanOnly?[u.waveform.mean]:[u.waveform.mean,...u.waveform.traces])for(const value of values){low=Math.min(low,value);high=Math.max(high,value);}
+  const pad=Math.max((high-low)*.08,1e-9);low-=pad;high+=pad;
+  const xLow=xs[0],xHigh=xs[xs.length-1];
+  const box=axes(w,h,'Time (ms)','Amplitude (source units)',Array.from({length:5},(_,i)=>tickLabel(xLow+(xHigh-xLow)*i/4)),Array.from({length:5},(_,i)=>tickLabel(high-(high-low)*i/4)));
+  const points=values=>values.map((v,i)=>`${(box.l+(xs[i]-xLow)/(xHigh-xLow)*box.iw).toFixed(2)},${(box.t+(high-v)/(high-low)*box.ih).toFixed(2)}`).join(' ');
+  const lines=available.map(u=>(meanOnly?'':u.waveform.traces.map(values=>`<polyline points="${points(values)}" fill="none" stroke="${u.color}" stroke-opacity=".18" stroke-width="1"/>`).join(''))+`<polyline data-waveform-cluster="${u.id}" points="${points(u.waveform.mean)}" fill="none" stroke="${u.color}" stroke-width="2"/>`).join('');
+  return `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Real cluster waveform${available.length>1?'s on shared axes':''}">${box.markup}${lines}</svg>`;
+}
+function realAmplitude(u){
+  const data=u.amplitude_time;
+  const xLow=Math.min(...data.time_seconds),xHigh=Math.max(...data.time_seconds),high=Math.max(...data.peak_to_trough)*1.05||1;
+  const w=610,h=250,box=axes(w,h,'Time (seconds)','Peak-to-trough (source units)',Array.from({length:5},(_,i)=>tickLabel(xLow+(xHigh-xLow)*i/4)),Array.from({length:5},(_,i)=>tickLabel(high*(1-i/4))));
+  const dots=data.time_seconds.map((t,i)=>`<circle cx="${box.l+(t-xLow)/Math.max(xHigh-xLow,1e-9)*box.iw}" cy="${box.t+(1-data.peak_to_trough[i]/high)*box.ih}" r="2" fill="${u.color}" opacity=".65"/>`).join('');
+  return `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Real peak-to-trough amplitude over time">${box.markup}${dots}</svg>`;
+}
+function realISI(u){
+  const data=u.isi,high=Math.max(...data.counts,1),w=610,h=250;
+  const box=axes(w,h,'ISI (ms)','Count',['0','12.5','25','37.5','50'],Array.from({length:5},(_,i)=>tickLabel(high*(1-i/4))));
+  const bars=data.counts.map((n,i)=>`<rect x="${box.l+i/data.counts.length*box.iw}" y="${box.t+(1-n/high)*box.ih}" width="${box.iw/data.counts.length}" height="${n/high*box.ih}" fill="${u.color}"/>`).join('');
+  return `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Real ISI histogram">${box.markup}${bars}</svg>`;
+}
+function savedImage(image){
+  const titles={waveform:'Waveform · saved model input',isi:'ISI histogram · saved model input',amplitude:'Amplitude distribution · saved model input',tree:'Aggregation tree · saved model input',small_waveform:'Source waveform · saved model input',large_waveform:'Target waveform · saved model input',merged_isi:'Merged ISI · saved model input'};
+  return plotCard(titles[image.name],`Verified SHA256 ${image.sha256.slice(0,12)}…`,`<img class="saved-evidence-image" src="${image.url}" alt="${titles[image.name]}" loading="lazy" decoding="async">`);
+}
+function realEvidence(c,u){
+  if(!c.evidenceLoaded){
+    if(!c.evidencePending&&!c.evidenceError){
+      c.evidencePending=true;
+      api(c.evidence_url).then(payload=>{
+        for(const detail of payload.units)Object.assign(c.units.find(unit=>unit.cluster_id===detail.cluster_id),detail);
+        c.evidenceLoaded=true;c.evidencePending=false;
+        if(currentCase()===c)renderEvidence();
+      }).catch(error=>{c.evidencePending=false;c.evidenceError=error.message;if(currentCase()===c)renderEvidence();});
+    }
+    return `<p class="tree-note">${c.evidenceError?'Real evidence could not be loaded: '+escapeHtml(c.evidenceError):'Loading verified real waveforms and saved images…'}</p>${c.evidenceError?'<button class="button" id="retry-evidence">Retry</button>':''}`;
+  }
+  if(selectedTab==='overview')return allWaveforms()+'<p class="tree-note">All active clusters in this exact pre-decision checkpoint. These extra mean waveforms were computed locally from MAT spike rows, not sent to the historical model.</p>';
+  if(selectedTab==='gallery')return gallery()+'<p class="tree-note">Real mean waveforms and population counts for this saved state. Click Expand for a mean plus up to 24 chronological traces.</p>';
+  if(selectedTab==='stability')return plotCard(`${u.title} · real amplitude over time`,'Extra reviewer evidence · up to 500 chronological rows',realAmplitude(u))+'<p class="tree-note">Time is in seconds; amplitude is in source units. Spatial coordinates were not imported, so no location plot is shown.</p>';
+  const modelIds=c.review_mode==='manual'?[]:c.pair||[c.source],modelObject=modelIds.includes(u.id);
+  if(selectedTab==='tree'){
+    const image=c.images.find(i=>i.name==='tree');
+    return image&&selectedUnitId===c.source?savedImage(image):`<p class="tree-note">No saved model tree image exists for this object in this step. Current checkpoint split availability: ${u.split?'available':'unavailable'}. No topology is invented.</p>`;
+  }
+  if(selectedTab==='timing'){
+    const image=c.images.find(i=>i.name===(c.phase_id==='phase1'?'isi':'merged_isi'));
+    return (modelObject&&image?savedImage(image):plotCard(`${u.title} · real ISI histogram`,'Extra reviewer evidence · all member spikes',realISI(u)))+`<p class="tree-note">ISI is the interval between adjacent sorted spikes, not an autocorrelogram. ${modelObject?'The image above is the original saved model input.':'This histogram was derived locally from the checkpoint.'}</p>`;
+  }
+  if(modelObject)return c.images.map(savedImage).join('')+'<p class="tree-note">Original frozen Phase 1 four-image / Phase 2 three-image evidence, verified against recorded image hashes. Saved model traces use the historical SHA256 member sample (up to 500); new reviewer views use at most 24 chronological traces.</p>';
+  return plotCard(`${u.title} · real waveform`,'Extra reviewer evidence · mean + up to 24 traces',waveform(u))+
+    plotCard(`${u.title} · real ISI histogram`,'All member spikes',realISI(u))+
+    `<p class="tree-note">${c.review_mode==='manual'?'Initial MAT hierarchy · manual review.':`Inspecting comparison ${u.title}; the review object remains ${sourceUnit(c).title}.`}</p>`;
+}
+function syncPlotTypography(){
+  const screenSize=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--chart-label-px'))||14;
+  $$('#evidence-content svg, #modal-content svg').forEach(svg=>{
+    if(svg.closest('.cluster-thumbnail'))return;
+    const width=svg.clientWidth,viewWidth=svg.viewBox.baseVal.width;
+    if(width>0&&viewWidth>0)svg.style.setProperty('--chart-label-size',`${screenSize*viewWidth/width}px`);
+  });
+}
+// View transforms are local to each graphic; data and review drafts are untouched.
+function attachPlotZoom(root,expanded=false){
+  root.querySelectorAll('.plot-card svg, .plot-card img').forEach(visual=>{
+    if(visual.closest('.plot-viewport'))return;
+    const card=visual.closest('.plot-card');
+    const title=card.querySelector('h3')?.textContent||visual.getAttribute('aria-label')||'Evidence plot';
+    const toolbar=document.createElement('div');
+    toolbar.className='plot-toolbar';toolbar.setAttribute('role','group');toolbar.setAttribute('aria-label',`${title} zoom controls`);
+    toolbar.innerHTML='<button type="button" data-zoom="out" aria-label="Zoom out" title="Zoom out (−)">−</button><output class="zoom-level" aria-live="polite">100%</output><button type="button" data-zoom="in" aria-label="Zoom in" title="Zoom in (+)">+</button><button type="button" data-zoom="reset" aria-label="Fit plot" title="Reset zoom and position (0)">↺</button>'+(expanded?'':'<button type="button" data-zoom="expand" aria-label="Expand plot" title="Expand plot">⤢</button>');
+    const viewport=document.createElement('div');viewport.className='plot-viewport';viewport.tabIndex=0;
+    viewport.setAttribute('role','group');viewport.setAttribute('aria-label',`${title}. Plus or minus to zoom, arrow keys to pan, 0 to reset.`);
+    const surface=document.createElement('div');surface.className='plot-surface';
+    visual.before(viewport);surface.append(visual);viewport.append(surface,toolbar);
+    if(visual.tagName.toLowerCase()==='img')visual.draggable=false;
+    let scale=1,x=0,y=0,drag=null;
+    const paint=()=>{
+      x=Math.max(viewport.clientWidth*(1-scale),Math.min(0,x));
+      y=Math.max(viewport.clientHeight*(1-scale),Math.min(0,y));
+      surface.style.transform=`translate(${x}px, ${y}px) scale(${scale})`;
+      viewport.dataset.scale=scale.toFixed(3);viewport.classList.toggle('is-zoomed',scale>1);
+      toolbar.querySelector('output').value=`${Math.round(scale*100)}%`;
+      toolbar.querySelector('[data-zoom="out"]').disabled=scale<=1;
+      toolbar.querySelector('[data-zoom="in"]').disabled=scale>=8;
+    };
+    const zoom=(next,px=viewport.clientWidth/2,py=viewport.clientHeight/2)=>{
+      next=Math.max(1,Math.min(8,next));const ratio=next/scale;
+      x=px-(px-x)*ratio;y=py-(py-y)*ratio;scale=next;paint();
+    };
+    toolbar.onclick=e=>{
+      const button=e.target.closest('[data-zoom]');if(!button)return;
+      const action=button.dataset.zoom;
+      if(action==='in')zoom(scale*1.25);
+      if(action==='out')zoom(scale/1.25);
+      if(action==='reset')zoom(1);
+      if(action==='expand')openExpandedPlot(title,visual.cloneNode(true));
+    };
+    viewport.addEventListener('wheel',e=>{
+      if(!(e.ctrlKey||e.metaKey))return;
+      e.preventDefault();const r=viewport.getBoundingClientRect();
+      zoom(scale*Math.exp(-Math.max(-100,Math.min(100,e.deltaY))*.005),e.clientX-r.left,e.clientY-r.top);
+    },{passive:false});
+    viewport.addEventListener('dblclick',e=>{
+      if(e.target.closest('.plot-toolbar'))return;
+      e.preventDefault();const r=viewport.getBoundingClientRect();zoom(scale>1?1:2,e.clientX-r.left,e.clientY-r.top);
+    });
+    viewport.addEventListener('pointerdown',e=>{
+      if(scale<=1||!e.isPrimary||e.button!==0||e.target.closest('.plot-toolbar'))return;
+      e.preventDefault();viewport.focus({preventScroll:true});viewport.setPointerCapture(e.pointerId);
+      drag={id:e.pointerId,x:e.clientX,y:e.clientY,startX:x,startY:y};viewport.classList.add('is-dragging');
+    });
+    viewport.addEventListener('pointermove',e=>{
+      if(!drag||drag.id!==e.pointerId)return;
+      x=drag.startX+e.clientX-drag.x;y=drag.startY+e.clientY-drag.y;paint();
+    });
+    const stopDrag=()=>{drag=null;viewport.classList.remove('is-dragging');};
+    viewport.addEventListener('lostpointercapture',stopDrag);viewport.addEventListener('pointercancel',stopDrag);
+    viewport.addEventListener('pointerup',e=>{if(viewport.hasPointerCapture(e.pointerId))viewport.releasePointerCapture(e.pointerId);stopDrag();});
+    viewport.addEventListener('keydown',e=>{
+      if(e.ctrlKey||e.metaKey||e.altKey||e.target.closest('.plot-toolbar'))return;
+      if(['+','=','-','0','Home','ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)){
+        if(e.key.startsWith('Arrow')&&scale===1)return;
+        e.preventDefault();e.stopPropagation();
+        if(e.key==='+'||e.key==='=')zoom(scale*1.25);
+        else if(e.key==='-')zoom(scale/1.25);
+        else if(e.key==='0'||e.key==='Home')zoom(1);
+        else{x+=e.key==='ArrowLeft'?40:e.key==='ArrowRight'?-40:0;y+=e.key==='ArrowUp'?40:e.key==='ArrowDown'?-40:0;paint();}
+      }
+    });
+    // A resize preserves the current scale while keeping the graphic inside its bounds.
+    viewport.addEventListener('plotresize',paint);paint();
+  });
+}
+function openExpandedPlot(title,visual){
+  modal(title,'<div class="plot-card expanded-plot"><div class="plot-heading"></div></div>');
+  const card=$('#modal-content .plot-card'),heading=document.createElement('h3');
+  heading.textContent=title;card.querySelector('.plot-heading').append(heading);card.append(visual);
+  $('#info-modal').classList.add('plot-modal');attachPlotZoom($('#modal-content'),true);syncPlotTypography();
 }
 function correlogram(c,cross=false,large=false){
   const w=large?610:296,h=large?250:177,{markup,l,t,iw,ih}=axes(w,h,'Lag (ms)','Count',['−25','0','25'],['80','60','40','20','0']),random=rng(c.seed+(cross?110:100));
@@ -186,7 +594,7 @@ function correlogram(c,cross=false,large=false){
   return `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Synthetic ${cross?'cross':'auto'}correlogram">${markup}<rect x="${l+iw*.46}" y="${t}" width="${iw*.08}" height="${ih}" fill="#fcf3e6" opacity=".8"/>${bars}</svg>`;
 }
 function amplitude(c,large=false){
-  const w=large?610:296,h=large?235:177,{markup,l,t,iw,ih}=axes(w,h,'Time (min)','µV',['0','5','10','15','20'],['160','120','80','40','0']),random=rng(c.seed+200);
+  const w=large?610:296,h=large?235:177,{markup,l,t,iw,ih}=axes(w,h,'Time (min)','Source units',['0','5','10','15','20'],['160','120','80','40','0']),random=rng(c.seed+200);
   let dots='';
   for(let i=0;i<270;i++){
     const x=random(),group=['mixed','split'].includes(c.kind)&&i>145;
@@ -213,66 +621,119 @@ function treePlot(c){
 }
 const plotCard=(title,meta,body,extra='')=>`<div class="plot-card"><div class="plot-heading"><h3>${title}</h3><span>${meta}</span></div>${body}${extra}</div>`;
 function renderEvidence(){
-  const c=currentCase();
+  const c=currentCase(),u=currentUnit(),pairTiming=!!c.pair&&selectedUnitId===c.source;
   $$('[data-tab]').forEach(b=>{b.classList.toggle('active',b.dataset.tab===selectedTab);b.setAttribute('aria-selected',String(b.dataset.tab===selectedTab));});
-  const legend=`<div class="legend"><span><i></i>${c.pair?'Unit 008':'Waveform family A'}</span>${['mixed','split','merge'].includes(c.kind)?`<span><i class="coral"></i>${c.pair?'Unit 021':'Waveform family B'}</span>`:''}<span><i class="gray"></i>Illustrative sample</span></div>`;
   let body='';
-  if(selectedTab==='overview'){
-    body=plotCard(c.pair?'Overlaid waveforms':'Waveform evidence','48 illustrative traces',waveform(c),legend)+
-      `<div class="plot-row">${plotCard(c.pair?'Cross-correlogram':'Autocorrelogram','1 ms bins',correlogram(c,!!c.pair))}${plotCard('Amplitude over time','20 min',amplitude(c))}</div>`+
-      `<div class="annotation"><span>◈</span><p>${c.kind==='mixed'?'Two waveform families are shown. Consider whether to inspect the children before discarding the entire cluster.':c.kind==='leaf'?'The proposed SPLIT is not executable. The split tree has no available child nodes.':c.pair?'Template similarity identifies a candidate pair. It does not establish that both clusters come from the same neuron.':'Use the evidence together. A single plot or metric does not determine the correct action.'}</p></div>`;
+  if(c.synthetic===false){
+    body=realEvidence(c,u);
+  }else if(selectedTab==='overview'){
+    body=allWaveforms()+'<p class="tree-note">All clusters belong to this case’s synthetic recording. Extra comparison evidence is recorded in your feedback.</p>';
+  }else if(selectedTab==='gallery'){
+    body=gallery()+'<p class="tree-note">Colors supplement stable cluster IDs. Counts describe the synthetic population, not the number of drawn traces.</p>';
+  }else if(selectedTab==='detail'){
+    body=plotCard(`${u.title} · waveform detail`,'24 illustrative traces + mean',waveform(u))+
+      `<div class="plot-row">${plotCard('Autocorrelogram','Illustrative timing',correlogram(u))}${plotCard('Amplitude over time','Illustrative stability',amplitude(u))}</div>`+
+      `<p class="tree-note">Inspecting ${u.title}; n = ${u.spikes.toLocaleString()}. Your review still concerns ${sourceUnit(c).title}. These demo views do not reproduce the frozen main-pipeline PNGs.</p>`;
   }else if(selectedTab==='timing'){
-    body=plotCard(c.pair?'Cross-correlogram':'Autocorrelogram','Lag window: ±25 ms',correlogram(c,!!c.pair,true),'<p class="plot-note">The shaded window highlights short lags. Counts and violations are illustrative.</p>')+
-      plotCard('Amplitude over time','Sampled events',amplitude(c,true))+
+    body=plotCard(pairTiming?'AI pair · cross-correlogram':`${u.title} · autocorrelogram`,'Lag window: ±25 ms',correlogram(u,pairTiming,true),'<p class="plot-note">Illustrative timing only; a correlogram is not the main pipeline’s ISI histogram.</p>')+
+      plotCard(`${u.title} · amplitude over time`,'Sampled events',amplitude(u,true))+
       '<div class="annotation"><span>◈</span><p>Interpret timing evidence in context, including spike count and recording stability.</p></div>';
   }else if(selectedTab==='stability'){
-    body=plotCard('Amplitude over time','20 min',amplitude(c,true))+
-      `<div class="plot-row">${plotCard('Event positions','Synthetic locations',locationPlot(c))}<div class="plot-card"><div class="plot-heading"><h3>Evidence provenance</h3></div><div class="tree-note"><span class="pill amber">Additional reviewer evidence</span><p style="margin-top:12px">The location view was not part of this case’s scripted AI input. The feedback record notes that you opened it.</p><p style="margin-top:12px">This distinction helps discuss whether a correction comes from better reasoning or access to more evidence.</p></div></div></div>`;
+    body=plotCard(`${u.title} · amplitude over time`,'20 min',amplitude(u,true))+
+      `<div class="plot-row">${plotCard('Event positions','Synthetic locations',locationPlot(u))}<div class="plot-card"><div class="plot-heading"><h3>Evidence provenance</h3></div><div class="tree-note"><span class="pill amber">Additional reviewer evidence</span><p style="margin-top:12px">Locations are invented for this demo and are not in the main pipeline’s observation fields. Viewing this tab is recorded separately.</p></div></div></div>`;
   }else{
-    body=plotCard(c.pair?'Proposed operation':'Current split tree','Read-only preview',treePlot(c))+
-      `<div class="annotation"><span>◈</span><p>${c.pair?'The two clusters remain separate until a merge is confirmed in the real system. This prototype only records your review.':c.split?'Two children are available. SPLIT means inspect those children next; it does not label either child as a good unit.':'This node is a leaf. A further tree split is unavailable, even if the model recommends it.'}</p></div>`;
+    body=plotCard(`${u.title} · split tree`,'Synthetic topology · read-only',treePlot(u))+
+      `<div class="annotation"><span>◈</span><p>${u.split?'Two illustrative children are available. This prototype records proposals without splitting any data.':'This node is a leaf. A further tree split is unavailable, even if the model recommends it.'}</p></div>`;
   }
   $('#evidence-content').innerHTML=body;
-  $('.evidence-footer>span:first-child').innerHTML=`<span class="teal-dot"></span>${selectedTab==='stability'?'Includes additional reviewer evidence':'Model-visible evidence'}`;
+  attachPlotZoom($('#evidence-content'));
+  syncPlotTypography();
+  $$('[data-inspect]').forEach(button=>button.onclick=()=>inspectUnit(button.dataset.inspect));
+  $$('[data-expand-unit]').forEach(button=>button.onclick=()=>{
+    const unit=c.units.find(u=>u.id===button.dataset.expandUnit),holder=document.createElement('div');
+    holder.innerHTML=waveform(unit);openExpandedPlot(`${unit.title} · waveform detail`,holder.firstElementChild);
+  });
+  if($('#retry-evidence'))$('#retry-evidence').onclick=()=>{c.evidenceError=null;renderEvidence();};
+  const extra=c.review_mode==='manual'||['overview','gallery','stability'].includes(selectedTab)||!(c.pair||[c.source]).includes(selectedUnitId);
+  $('.evidence-footer>span:first-child').innerHTML=`<span class="teal-dot"></span>${extra?'Additional reviewer evidence':c.synthetic===false?'Verified saved model input':'Scripted demo evidence'}`;
 }
-function modal(title,body){$('#modal-title').textContent=title;$('#modal-content').innerHTML=body;if(!$('#info-modal').open)$('#info-modal').showModal();}
+function modal(title,body){$('#info-modal').classList.remove('plot-modal');$('#modal-title').textContent=title;$('#modal-content').innerHTML=body;if(!$('#info-modal').open)$('#info-modal').showModal();}
 function showPacket(){
   const c=currentCase();
-  modal('What the model was shown',`<div class="modal-prose"><p>This packet is <strong>scripted for the mockup</strong>. No model has analyzed these synthetic signals.</p></div><table class="packet-table"><tr><th>Snapshot</th><td class="mono">synthetic-${c.id}-v1</td></tr><tr><th>Object</th><td>${escapeHtml(c.title)} · ${c.channel}</td></tr><tr><th>Included views</th><td>Waveforms, ${c.pair?'cross':'auto'}correlogram, amplitude over time</td></tr><tr><th>Included context</th><td>Spike count, signal-to-noise ratio, ISI violations, recording duration, ${c.pair?'candidate pair':'split-tree availability'}</td></tr><tr><th>Not included</th><td>Event-location view, raw voltage recording, expert labels</td></tr><tr><th>Valid actions</th><td>${allowed(c).join(' · ')}</td></tr></table><div class="packet-code">Proposed action: ${c.ai}\nExecutable in this state: ${allowed(c).includes(c.ai)?'yes':'no — blocked by the review interface'}</div><p class="modal-prose" style="margin-top:16px">The same packet identifier travels with your feedback. Extra evidence viewed by the reviewer is recorded separately.</p>`);
+  if(c.synthetic===false){
+    modal(c.review_mode==='manual'?'MAT input · manual review':'Saved model input · real data',`<div class="modal-prose"><p><strong>${escapeHtml(c.dataset_id)} · ${escapeHtml(c.step_id)}</strong></p><p>${c.review_mode==='manual'?'These initial MAT clusters have no model request or decision.':'The historical model received these numeric observations and the saved images.'} Expert terminal labels and annotations were not imported. No new model request is running.</p></div><div class="packet-code">${escapeHtml(JSON.stringify({phase:c.phase_id,metrics:c.metrics,state_sha256:c.state_sha256,mat_sha256:c.mat_sha256,image_sha256:c.image_sha256,request_sha256:c.request_sha256,request_hash_status:c.request_hash_status},null,2))}</div>`);return;
+  }
+  modal('Scripted input · not a live request',`<div class="modal-prose"><p>No model has analyzed these signals. This is a <strong>synthetic case description</strong>, not a reproduction of a frozen main-pipeline request.</p></div><table class="packet-table"><tr><th>Recording</th><td class="mono">${c.dataset_id}</td></tr><tr><th>Snapshot</th><td class="mono">synthetic-${c.id}-v2</td></tr><tr><th>Agent</th><td>Agent 1 · scripted demo</td></tr><tr><th>AI objects</th><td>${(c.pair||[c.source]).map(id=>unitLabel(c,id)).join(' + ')}</td></tr><tr><th>Scripted evidence</th><td>Waveforms, timing, amplitude and tree availability for the AI objects</td></tr><tr><th>Extra reviewer views</th><td>All-cluster comparison, gallery, location, and other clusters</td></tr><tr><th>Backend phase actions</th><td>${Core.PHASE_ACTIONS[c.phase_id].join(' · ')}</td></tr><tr><th>Request/image hashes</th><td>Unavailable · no real request exists</td></tr></table><div class="packet-code">AI action: ${c.ai}\nAvailable for expert review: ${allowed(c).includes(c.ai)?'yes':'no — invalid leaf split'}</div><p class="modal-prose" style="margin-top:16px">Expert MERGE corrections may propose a different target. DEFER is saved as a review status. Neither is sent to the controller.</p>`);
 }
-function showUnsaved(nextId){
+function showUnsaved(nextId,callback=null){
   modal('Leave this unsaved review?',`<div class="modal-prose"><p>Your action or note has not been saved. You can keep editing or discard this draft and open the other case.</p></div><div style="display:flex;gap:10px;margin-top:22px"><button class="button" id="keep-editing">Keep editing</button><button class="button primary" id="discard-draft">Discard draft & switch</button></div>`);
   $('#keep-editing').onclick=()=>$('#info-modal').close();
-  $('#discard-draft').onclick=()=>{$('#info-modal').close();selectCase(nextId,true);};
+  $('#discard-draft').onclick=()=>{$('#info-modal').close();if(callback)callback();else selectCase(nextId,true);};
 }
 function showAbout(){
-  modal('A workspace for expert judgment',`<div class="modal-prose"><p><strong>Purpose.</strong> Explore the human review experience before choosing a research workflow.</p><p><strong>Try three cases.</strong> Correct Unit 042 from Discard to Split; compare Units 008 + 021; then inspect the unavailable Split on Unit 031.</p><p><strong>What works.</strong> Case navigation, evidence views, action constraints, reviewer notes, browser-local saving, undo, feedback history, and JSON export.</p><p><strong>What is illustrative.</strong> Every trace, number, AI recommendation, and proposed workflow revision. No real recordings, model calls, spike edits, or learning jobs are connected.</p><p><strong>Meeting questions.</strong> What evidence should appear first? What should require a reason? Which actions need a preview or a second review?</p></div>`);
+  if(mode==='real'){
+    modal('Jacob real-data review',`<div class="modal-prose"><p><strong>${escapeHtml(realCatalog.dataset_id)}</strong> · ${CASES.length} ${realCatalog.source_kind==='initial'?'initial clusters for manual review':'saved Qwen9B decisions'}. Your proposals are annotations and do not change spike assignments or advance a historical trajectory.</p><p>Saved input PNGs, when present, are original model evidence. Overview, Gallery and amplitude-over-time are reviewer views computed locally from the MAT input fields.</p><p>Use Data & inputs to upload/import approved MAT files, select views, manage reason files or restore feedback. Reviews, revisions, reasons and reviewer names are saved on this server.</p><p>No live model, automatic experiment or training is running.</p></div>`);return;
+  }
+  modal('A workspace for expert judgment',`<div class="modal-prose"><p><strong>Try it.</strong> Agree with a KEEP without a comment. Disagree with only a rationale. For the merge case, replace target 021 with 034. Explore all waveforms and the gallery.</p><p><strong>Feedback.</strong> Disagreement needs a reason or note; agreement can include an optional positive comment. New reasons can be reused in this browser.</p><p><strong>Persistence.</strong> Save, reload, undo and export preserve review events. Older v1 feedback stays untouched and is exported separately.</p><p><strong>Scope.</strong> All recordings, counts, plots and AI suggestions are synthetic. No models, MAT files, backend actions or learning jobs are connected.</p></div>`);
 }
 
 $$('[data-view]').forEach(b=>b.onclick=()=>showView(b.dataset.view));
 $('.brand').onclick=e=>{e.preventDefault();showView('review');};
 $$('[data-filter]').forEach(b=>b.onclick=()=>{filter=b.dataset.filter;$$('[data-filter]').forEach(x=>x.classList.toggle('active',x===b));renderQueue();});
-$$('[data-tab]').forEach(b=>b.onclick=()=>{selectedTab=b.dataset.tab;tabsViewed.add(selectedTab);renderEvidence();});
+$$('[data-tab]').forEach(b=>b.onclick=()=>{selectedTab=b.dataset.tab;recordEvidence();renderEvidence();});
 $('#case-search').addEventListener('input',renderQueue);
-$('#reason-select').addEventListener('change',()=>{isDirty=true;$('#form-error').textContent='';});
+$('#file-filter').addEventListener('change',renderQueue);
+$('#phase-filter').addEventListener('change',renderQueue);
+$('#clear-queue-filters').onclick=resetQueueFilters;
+$('#reason-select').addEventListener('input',()=>{isDirty=true;$('#form-error').textContent='';queryReasons();});
+$('#reason-select').addEventListener('focus',queryReasons);
+$('#reason-select').addEventListener('blur',hideReasonMatches);
+$('#reason-select').addEventListener('keydown',e=>{
+  if(e.key==='Escape'){e.preventDefault();hideReasonMatches();return;}
+  if(e.key==='ArrowDown'||e.key==='ArrowUp'){
+    e.preventDefault();if($('#reason-suggestions').hidden)showReasonMatches();if(!reasonMatches.length)return;
+    reasonIndex=(reasonIndex+(e.key==='ArrowDown'?1:-1)+reasonMatches.length)%reasonMatches.length;
+    $$('[data-reason-index]').forEach((b,i)=>b.setAttribute('aria-selected',String(i===reasonIndex)));
+    $('#reason-select').setAttribute('aria-activedescendant',`reason-option-${reasonIndex}`);
+    document.getElementById(`reason-option-${reasonIndex}`).scrollIntoView({block:'nearest'});
+  }else if(e.key==='Enter'&&!$('#reason-suggestions').hidden&&reasonIndex>=0){e.preventDefault();chooseReason(reasonIndex);}
+});
+$('#data-source').onchange=()=>{
+  const next=$('#data-source').value;$('#data-source').value=sourceChoice;
+  if(saving)return;
+  if(isDirty)showUnsaved(null,()=>switchSource(next));else switchSource(next);
+};
 $('#review-note').addEventListener('input',()=>{isDirty=true;$('#form-error').textContent='';});
+$('#positive-comment').addEventListener('input',()=>{isDirty=true;});
+$('#reviewer-name').value=state.annotator;
+$('#reviewer-name').addEventListener('input',()=>{state.annotator=$('#reviewer-name').value.trim();profileName=state.annotator;persist();scheduleProfileSave();});
+$('#agree-button').onclick=()=>setAgreement(true);
+$('#disagree-button').onclick=()=>setAgreement(false);
+$('#merge-target').onchange=()=>{draft.target=$('#merge-target').value;isDirty=true;$('#form-error').textContent='';renderActions();renderEvidence();};
+for(const type of ['rationale','evidence'])$('#disagree-'+type).onchange=()=>{
+  draft.disagreement_types=['rationale','evidence'].filter(t=>$('#disagree-'+t).checked);isDirty=true;$('#form-error').textContent='';renderActions();
+};
 $('#save-button').onclick=saveReview;
-$('#defer-button').onclick=()=>{selectedAction='DEFER';isDirty=true;$('#reason-select').value='Evidence is missing or ambiguous';renderActions();$('#review-note').focus();toast('Defer selected. Add a note if helpful, then save.');};
+$('#defer-button').onclick=()=>{setAgreement(false);draft.action='DEFER';renderActions();$('#review-note').focus();toast('Defer selected. Explain what evidence is missing, then save.');};
 $('#export-button').onclick=exportFeedback;$('#history-export').onclick=exportFeedback;
 $('#history-link').onclick=()=>showView('history');
-$('#packet-button').onclick=showPacket;$('#input-button').onclick=showPacket;
+$('#packet-button').onclick=showPacket;
 $('#tour-button').onclick=showAbout;
 $('#close-modal').onclick=()=>$('#info-modal').close();
 $('#info-modal').addEventListener('click',e=>{if(e.target===$('#info-modal')){const r=$('#info-modal').getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)$('#info-modal').close();}});
 $('#reset-button').onclick=()=>{
-  modal('Reset the meeting demo?',`<div class="modal-prose"><p>This clears the reviews and event history stored by this demo in this browser. Export your feedback first if you want to keep it.</p></div><div style="display:flex;gap:10px;margin-top:22px"><button class="button" id="cancel-reset">Keep reviews</button><button class="button primary" id="confirm-reset">Reset demo</button></div>`);
+  modal('Reset the meeting demo?',`<div class="modal-prose"><p>This clears v2 reviews and event history. Export first to keep them. Saved reasons and older v1 feedback are retained.</p></div><div style="display:flex;gap:10px;margin-top:22px"><button class="button" id="cancel-reset">Keep reviews</button><button class="button primary" id="confirm-reset">Reset demo</button></div>`);
   $('#cancel-reset').onclick=()=>$('#info-modal').close();
-  $('#confirm-reset').onclick=()=>{state={reviews:{},events:[]};persist();filter='all';$('#case-search').value='';$$('[data-filter]').forEach(b=>b.classList.toggle('active',b.dataset.filter==='all'));$('#info-modal').close();selectCase(CASES[0].id,true);showView('review');toast('Demo reset. All six cases are ready to review.');};
+  $('#confirm-reset').onclick=()=>{state.reviews={};state.events=[];persist();resetQueueFilters();$('#info-modal').close();selectCase(CASES[0].id,true);showView('review');toast('Demo reset. Saved reasons were retained.');};
 };
 document.addEventListener('keydown',e=>{
-  if((e.metaKey||e.ctrlKey)&&e.key==='Enter'&&currentView==='review'&&!$('#info-modal').open){e.preventDefault();saveReview();}
+  if((e.metaKey||e.ctrlKey)&&e.key==='Enter'&&currentView==='review'&&!$('#info-modal').open&&!$('#data-modal').open){e.preventDefault();saveReview();}
 });
 window.addEventListener('beforeunload',e=>{if(isDirty){e.preventDefault();e.returnValue='';}});
+window.addEventListener('resize',()=>{syncPlotTypography();$$('.plot-viewport').forEach(v=>v.dispatchEvent(new Event('plotresize')));});
+populateQueueFiles();
 selectCase(selectedId,true);
 showView(location.hash.replace('#','')||'review');
+$('#storage-warning').hidden=storageAvailable;
 if(!storageAvailable)toast('Browser storage unavailable. Export feedback before closing.');
+window.addEventListener('DOMContentLoaded',connectBackend,{once:true});
