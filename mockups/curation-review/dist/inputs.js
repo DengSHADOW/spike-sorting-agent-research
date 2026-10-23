@@ -2,6 +2,7 @@
 
 let datasetInputs=[],jobPoll=null,uploadRequest=null,pendingBackup=null,profileTimer=null,profileQueue=Promise.resolve();
 let trackedImportJob=null;
+let browsedReasons=[];
 const choiceForBundle=id=>bundleCatalog[0]?.id===id?'real':'bundle:'+id;
 
 async function refreshDatasetMenu(){
@@ -63,7 +64,7 @@ async function openInputManager(){
     const previous=$('#import-dataset').value;
     $('#import-dataset').innerHTML=datasetInputs.map(r=>`<option value="${r.dataset_id}">${r.dataset_id}</option>`).join('');
     if(datasetInputs.some(r=>r.dataset_id===previous))$('#import-dataset').value=previous;
-    updateImportSelection();updateUploadMode();await refreshImportJobs();
+    updateImportSelection();updateUploadMode();await refreshImportJobs();await refreshReasonStatus();
   }catch(e){inputMessage('import-message',e.message,true);}
 }
 function uploadMAT(file,dataset){
@@ -113,8 +114,26 @@ async function importReasonFile(){
     const result=await api('/api/reasons/import-file',{format,content:text});
     mergeReasons((await api('/api/reasons')).reasons);renderReasons();
     inputMessage('reason-import-message',`${result.added} reasons added; ${result.duplicates} duplicates skipped.`);
+    await refreshReasonStatus();if(!$('#reason-library-browser').hidden)await browseReasonLibrary();
   }catch(e){inputMessage('reason-import-message',e.message,true);}
   finally{$('#import-reasons-file').disabled=false;}
+}
+async function refreshReasonStatus(){
+  const status=await api('/api/reasons/status');
+  $('#reason-library-status').textContent=status.jacob?`${status.total} shared reasons. Jacob defaults: ${status.jacob.unique_reasons} unique reasons from ${status.jacob.n_source_rows} original rows (CH3, CH31, CH30). CH20's inconsistent old sheet is excluded.`:`${status.total} shared reasons. The Jacob default seed has not been initialized on this server.`;
+}
+function renderReasonLibrary(){
+  const prefix=$('#reason-library-prefix').value,source=$('#reason-library-source').value;
+  const matches=Core.matchReasons(browsedReasons,prefix).filter(r=>source==='all'||(source==='jacob'?r.sources?.some(s=>s.kind==='jacob'):r.sources?.some(s=>s.kind!=='jacob')));
+  $('#reason-library-list').innerHTML=matches.length?matches.map(r=>{
+    const original=r.sources?.find(s=>s.kind==='jacob');
+    return `<div class="input-record"><strong>${escapeHtml(r.text)}</strong><span>${reasonSourceLabel(r)} · used ${r.uses||0} times</span>${original?`<details><summary>Original source · ${original.references.length} row reference${original.references.length===1?'':'s'}</summary>${original.references.map(ref=>`<p class="input-help">${escapeHtml(ref.sheet)} · row ${ref.row}<br>Workbook SHA256: ${escapeHtml(ref.sha256)}<br>Original text: ${escapeHtml(ref.original_text)}</p>`).join('')}</details>`:''}</div>`;
+  }).join(''):'<p class="input-help">No reasons match this prefix/source.</p>';
+}
+async function browseReasonLibrary(){
+  $('#reason-library-browser').hidden=false;
+  try{browsedReasons=(await api('/api/reasons?limit=5000')).reasons;renderReasonLibrary();}
+  catch(e){inputMessage('reason-import-message',e.message,true);}
 }
 async function checkBackup(){
   $('#restore-feedback-file').disabled=true;pendingBackup=null;
@@ -175,6 +194,9 @@ $('#import-origin').onchange=updateUploadMode;
 $('#start-import').onclick=beginImport;
 $('#cancel-upload').onclick=()=>uploadRequest?.abort();
 $('#import-reasons-file').onclick=importReasonFile;
+$('#browse-reasons').onclick=browseReasonLibrary;
+$('#reason-library-prefix').oninput=renderReasonLibrary;
+$('#reason-library-source').onchange=renderReasonLibrary;
 $('#export-reasons-file').onclick=async()=>{try{downloadInputJSON(await api('/api/reasons/export'),'spikeagent-reasons.json');}catch(e){inputMessage('reason-import-message',e.message,true);}};
 $('#feedback-import-file').onchange=()=>{pendingBackup=null;$('#restore-feedback-file').disabled=true;inputMessage('feedback-import-message','');};
 $('#check-feedback-file').onclick=checkBackup;$('#restore-feedback-file').onclick=restoreBackup;

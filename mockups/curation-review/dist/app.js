@@ -216,11 +216,14 @@ function selectCase(id,force=false){
   if(!force&&isDirty&&id!==selectedId){showUnsaved(id);return;}
   if(!CASES.some(c=>c.id===id))return;
   selectedId=id;selectedTab='detail';tabsViewed=new Set();unitsViewed=new Set();rationaleViewed=false;rationaleExpanded=false;isDirty=false;
+  resetAnalysisExposure(id);
   const c=currentCase(),review=state.reviews[id];
   selectedUnitId=c.source;
   draft={agree:review?review.expert_agree:null,action:review?review.action:c.review_mode==='manual'?'KEEP':allowed(c).includes(c.ai)?c.ai:null,
     target:review&&review.expert_merge_target!==null?c.units.find(u=>u.cluster_id===review.expert_merge_target)?.id:c.pair?.[1]||'',
     reason:review?.expert_reason||'',note:review?.expert_note||'',positive:review?.expert_positive_comment||'',
+    confidence:review?.expert_confidence??null,sufficiency:review?.evidence_sufficiency||'unspecified',
+    missing:review?.missing_evidence||[],missing_note:review?.missing_evidence_note||'',
     disagreement_types:(review?.disagreement_types||[]).filter(t=>['rationale','evidence'].includes(t))};
   $('#reason-select').value=draft.reason;$('#review-note').value=draft.note;$('#positive-comment').value=draft.positive;
   $('#disagree-rationale').checked=draft.disagreement_types.includes('rationale');
@@ -231,12 +234,14 @@ function selectCase(id,force=false){
 }
 function renderCase(){
   const c=currentCase(),u=currentUnit();
+  const savedWave=savedWaveformFor(c,u);
+  const traceCount=c.synthetic===false?(savedWave?Math.min(u.spikes,500):u.waveform?.traces.length??Math.min(u.spikes,24)):24;
   $('#case-channel').textContent=c.synthetic===false?`${c.dataset_id} / ${c.step_id} / ${c.phase_id.toUpperCase()}`:`${c.channel} / ${c.phase.toUpperCase()} / DEMO CASE`;
   $('#case-title').textContent=u.title;
   $('#case-badges').innerHTML=`<span class="pill">${c.pair?'Pair review':'Single cluster'}</span><span class="pill ${c.risk==='High impact'?'amber':'teal'}">${state.reviews[c.id]?'Reviewed':c.risk}</span>`;
   $('#metrics').innerHTML=[
     ['Cluster spikes',u.spikes.toLocaleString(),''],
-    [c.review_mode==='manual'?'Reviewer traces':c.synthetic===false?'Saved source traces':'Displayed traces',String(c.displayed_trace_count??24),''],
+    [savedWave?'Saved detail traces':'Detail traces',String(traceCount),''],
     ['Recording clusters',String(c.units.length),''],
     ['Evidence',c.synthetic===false?'Real MAT':'Synthetic','']
   ].map(([label,value,unit,warn])=>`<div class="metric ${warn?'warn':''}"><span>${label}</span><strong>${value}<small>${unit}</small></strong></div>`).join('');
@@ -262,7 +267,7 @@ function renderActions(){
   }
   $('#correction-panel').hidden=!manual&&draft.agree!==false;$('#positive-panel').hidden=manual?draft.action!=='KEEP':draft.agree!==true;
   $('#action-grid').innerHTML=actions.map(a=>`<button type="button" class="action-option ${draft.action===a?'selected':''}" data-action="${a}" aria-pressed="${draft.action===a}" ${!allowed(c).includes(a)?'disabled title="No child clusters are available"':''}><span class="action-icon" aria-hidden="true">${ACTIONS[a].icon}</span><span>${ACTIONS[a].label}</span><span class="radio" aria-hidden="true"></span></button>`).join('');
-  $$('[data-action]').forEach(b=>b.onclick=()=>{draft.action=b.dataset.action;isDirty=true;$('#form-error').textContent='';renderActions();renderEvidence();});
+  $$('[data-action]').forEach(b=>b.onclick=()=>{draft.action=b.dataset.action;isDirty=true;$('#form-error').textContent='';if(draft.action==='DEFER')draft.sufficiency='insufficient';if(mode==='real'&&draft.action==='MERGE'){if(!Core.candidates(c).some(u=>u.id===draft.target)&&Core.candidates(c).some(u=>u.id===comparisonChoices.get(c.id)))draft.target=comparisonChoices.get(c.id);selectedTab='pair';recordEvidence();}renderActions();renderEvidence();});
   $('#merge-controls').hidden=draft.action!=='MERGE';
   $('#merge-source').textContent=`Source: ${sourceUnit(c).title} · n = ${sourceUnit(c).spikes.toLocaleString()}`;
   $('#merge-target').innerHTML='<option value="">Choose a target cluster…</option>'+Core.candidates(c).map(u=>`<option value="${u.id}">${u.title} · n = ${u.spikes.toLocaleString()}</option>`).join('');
@@ -274,6 +279,25 @@ function renderActions(){
   $('#save-button').disabled=saving||(!manual&&draft.agree===null)||!draft.action;
   $('.reason-section>label[for="reason-select"] span').textContent=manual&&draft.action==='KEEP'?'optional for KEEP':'reason or note required';
   $('#save-button').innerHTML=`${state.reviews[c.id]?'Update review & next':'Save review & next'} <span aria-hidden="true">→</span>`;
+  renderJudgmentDetails();
+}
+function renderJudgmentDetails(){
+  $('#judgment-confidence').value=draft.confidence||'';
+  $('#evidence-sufficiency').value=draft.sufficiency||'unspecified';
+  $('#missing-evidence-fields').hidden=draft.sufficiency!=='insufficient';
+  $$('.missing-evidence-options input').forEach(input=>input.checked=(draft.missing||[]).includes(input.value));
+  $('#missing-evidence-note').value=draft.missing_note||'';
+}
+function reasonSourceLabel(reason){
+  return reason.sources?.some(s=>s.kind==='jacob')?'Jacob original':reason.sources?.some(s=>s.kind==='reviewer')?'Reviewer-added':reason.sources?.length?'Imported reason':'Saved reason';
+}
+function reviewJudgmentMeta(review){
+  const parts=[];
+  if(review.expert_confidence)parts.push(review.expert_confidence+' confidence');
+  if(review.evidence_sufficiency&&review.evidence_sufficiency!=='unspecified')parts.push(review.evidence_sufficiency+' evidence');
+  if(review.missing_evidence?.length)parts.push('Missing: '+review.missing_evidence.map(item=>item.replaceAll('_',' ')).join(', '));
+  if(review.missing_evidence_note)parts.push(review.missing_evidence_note);
+  return parts.length?`<small class="judgment-meta">${escapeHtml(parts.join(' · '))}</small>`:'';
 }
 function setAgreement(agree){
   const c=currentCase();draft.agree=c.review_mode==='manual'?null:agree;isDirty=true;$('#form-error').textContent='';
@@ -289,7 +313,7 @@ function hideReasonMatches(){reasonSequence++;clearTimeout(reasonTimer);$('#reas
 function showReasonMatches(){
   const input=$('#reason-select'),prefix=input.value;
   reasonMatches=Core.matchReasons(state.reasons,prefix).slice(0,20);reasonIndex=-1;
-  $('#reason-suggestions').innerHTML=reasonMatches.map((r,i)=>`<button type="button" role="option" aria-selected="false" tabindex="-1" id="reason-option-${i}" data-reason-index="${i}"><span>${escapeHtml(r.text)}</span><small>${r.uses?`Used ${r.uses}×`:backend?'Saved on server':'Previously used'}</small></button>`).join('');
+  $('#reason-suggestions').innerHTML=reasonMatches.map((r,i)=>`<button type="button" role="option" aria-selected="false" tabindex="-1" id="reason-option-${i}" data-reason-index="${i}"><span>${escapeHtml(r.text)}</span><small>${reasonSourceLabel(r)}${r.uses?` · Used ${r.uses}×`:''}</small></button>`).join('');
   const open=reasonMatches.length>0&&!$('#correction-panel').hidden&&document.activeElement===input;
   $('#reason-suggestions').hidden=!open;input.setAttribute('aria-expanded',String(open));input.removeAttribute('aria-activedescendant');
   $$('[data-reason-index]').forEach(b=>{b.onpointerdown=e=>e.preventDefault();b.onclick=()=>chooseReason(Number(b.dataset.reasonIndex));});
@@ -312,7 +336,7 @@ async function saveReview(){
   draft.reason=$('#reason-select').value;draft.note=$('#review-note').value;draft.positive=$('#positive-comment').value;
   const error=Core.validate(c,draft);
   if(error){$('#form-error').textContent=error;return;}
-  const context={viewed_cluster_ids:[...unitsViewed],visible_cluster_ids:visibleUnits(),viewed_tabs:[...tabsViewed],rationale_viewed:rationaleViewed,annotator:state.annotator};
+  const context={viewed_cluster_ids:[...unitsViewed],visible_cluster_ids:visibleUnits(),viewed_tabs:[...tabsViewed],rationale_viewed:rationaleViewed,annotator:state.annotator,pair_comparisons:comparedPairs(c)};
   let review;
   if(mode==='real'){
     saving=true;$('.decision-panel').inert=true;renderActions();$('#save-button').textContent='Saving to server…';
@@ -352,7 +376,7 @@ function renderHistory(){
   const corrected=reviews.filter(r=>r.expert_agree===false).length;
   $('#history-stats').innerHTML=[['Reviewed',reviews.length],['Suggestions accepted',reviews.filter(r=>r.expert_agree===true).length],['Suggestions corrected',corrected],['Deferred',reviews.filter(r=>r.action==='DEFER').length]].map(([name,n])=>`<div class="stat-card"><span>${name}</span><strong>${n.toString().padStart(2,'0')}</strong></div>`).join('');
   const pairText=(r,which)=>r[which+'_pair']?' · '+r[which+'_pair'].join(' + '):'';
-  $('#history-list').innerHTML=(legacyFeedback?'<p class="legacy-note">Older v1 feedback is preserved and included separately in your JSON export.</p>':'')+(reviews.length?`<table class="history-table"><thead><tr><th>Case</th><th>AI suggestion</th><th>Your judgment</th><th>Reason / comment</th><th>Time</th><th></th></tr></thead><tbody>${reviews.map(r=>`<tr><td><strong>${escapeHtml(r.case_id)}</strong><small>${escapeHtml(r.dataset_id)}</small></td><td>${ACTIONS[r.ai_action]?.label||'No model decision'}${pairText(r,'ai')}</td><td><span class="pill ${r.expert_agree?'teal':'amber'}">${ACTIONS[r.action].label}${pairText(r,'expert')}</span><small>${r.review_mode==='manual'?'Manual proposal':r.expert_agree?'Agreed':'Disagreed'}${r.disagreement_types.length?' · '+escapeHtml(r.disagreement_types.join(', ')):''}</small></td><td>${escapeHtml(r.expert_reason||r.expert_positive_comment||'No comment')}<small>${escapeHtml(r.expert_note)}</small></td><td class="mono">${dateText(r.timestamp)}</td><td><button class="text-button" data-undo="${escapeHtml(r.case_id)}">Undo</button></td></tr>`).join('')}</tbody></table>`:'<div class="empty-state"><div class="empty-icon">✓</div><h3>Your first review starts the record.</h3><p>Record a proposal or review a model suggestion in the workspace.</p><button class="button" id="empty-review">Open review workspace →</button></div>');
+  $('#history-list').innerHTML=(legacyFeedback?'<p class="legacy-note">Older v1 feedback is preserved and included separately in your JSON export.</p>':'')+(reviews.length?`<table class="history-table"><thead><tr><th>Case</th><th>AI suggestion</th><th>Your judgment</th><th>Reason / comment</th><th>Time</th><th></th></tr></thead><tbody>${reviews.map(r=>`<tr><td><strong>${escapeHtml(r.case_id)}</strong><small>${escapeHtml(r.dataset_id)}</small></td><td>${ACTIONS[r.ai_action]?.label||'No model decision'}${pairText(r,'ai')}</td><td><span class="pill ${r.expert_agree?'teal':'amber'}">${ACTIONS[r.action].label}${pairText(r,'expert')}</span><small>${r.review_mode==='manual'?'Manual proposal':r.expert_agree?'Agreed':'Disagreed'}${r.disagreement_types.length?' · '+escapeHtml(r.disagreement_types.join(', ')):''}</small></td><td>${escapeHtml(r.expert_reason||r.expert_positive_comment||'No comment')}<small>${escapeHtml(r.expert_note)}</small>${reviewJudgmentMeta(r)}</td><td class="mono">${dateText(r.timestamp)}</td><td><button class="text-button" data-undo="${escapeHtml(r.case_id)}">Undo</button></td></tr>`).join('')}</tbody></table>`:'<div class="empty-state"><div class="empty-icon">✓</div><h3>Your first review starts the record.</h3><p>Record a proposal or review a model suggestion in the workspace.</p><button class="button" id="empty-review">Open review workspace →</button></div>');
   $('#view-history .section-title>.pill').textContent=mode==='real'?'Saved on server':'Browser-local';
   $$('[data-undo]').forEach(b=>b.onclick=()=>undoReview(b.dataset.undo));
   if($('#empty-review'))$('#empty-review').onclick=()=>showView('review');
@@ -389,8 +413,17 @@ function tracePoints(u,box,offset=()=>0){
     return `${(box.l+x*box.iw).toFixed(1)},${(box.t+(60-y)/220*box.ih).toFixed(1)}`;
   }).join(' ');
 }
-function waveform(u,thumbnail=false){
-  if(currentCase().synthetic===false)return realWaveform([u],thumbnail);
+function savedWaveformFor(c,u){
+  if(c.synthetic!==false||c.review_mode==='manual')return null;
+  const name=c.pair?(u.id===c.source?'small_waveform':u.id===c.pair[1]?'large_waveform':null):u.id===c.source?'waveform':null;
+  return c.images.find(image=>image.name===name)||null;
+}
+function waveformLegend(u){
+  const real=currentCase().synthetic===false;
+  return `<div class="plot-key" aria-label="Waveform legend"><span><i style="--key-color:${u.color}"></i>Solid line: ${escapeHtml(u.title)} mean</span><span><i class="trace-key" style="--key-color:${u.color}"></i>Faint lines: ${real?'up to 24 individual spikes':'24 illustrative traces'}</span></div><p class="plot-note">${real?'Mean uses all member spikes; individual traces are a chronological sample.':'Synthetic example; the mean and traces are illustrative.'} Total cluster spikes and displayed traces are different counts.</p>`;
+}
+function waveform(u,thumbnail=false,limits=null){
+  if(currentCase().synthetic===false)return realWaveform([u],thumbnail,limits);
   const w=610,h=218,box=axes(w,h,'Time (ms)','Source units',['−0.5','0','0.5','1.0','1.5'],['60','5','−50','−105','−160']);
   const random=rng(u.seed);let lines='';
   if(!thumbnail)for(let k=0;k<24;k++){
@@ -402,8 +435,9 @@ function waveform(u,thumbnail=false){
 }
 function visibleUnits(){
   const c=currentCase();
+  if(selectedTab==='pair')return comparisonTarget(c)?[c.source,comparisonTarget(c)]:[c.source];
   if(['overview','gallery'].includes(selectedTab))return c.units.map(u=>u.id);
-  if(selectedTab==='timing'&&c.pair&&selectedUnitId===c.source)return c.pair;
+  if(selectedTab==='timing'&&c.pair&&(selectedUnitId===c.source||(c.synthetic===false&&c.pair.includes(selectedUnitId))))return c.pair;
   return [selectedUnitId];
 }
 function recordEvidence(){
@@ -427,28 +461,38 @@ function clusterTags(u){
 function allWaveforms(){
   if(currentCase().synthetic===false){
     const legend=currentCase().units.map(u=>`<button class="cluster-legend" data-inspect="${u.id}"><i style="background:${u.color}"></i><strong>${u.title}</strong><span>n = ${u.spikes.toLocaleString()}</span>${clusterTags(u)}</button>`).join('');
-    return plotCard('All active clusters · real checkpoint','Means of all member spikes · shared axes',realWaveform(currentCase().units,true)+`<div class="cluster-legends">${legend}</div>`);
+    return plotCard('All active clusters · real checkpoint','Means of all member spikes · shared axes',comparisonControls()+realWaveform(currentCase().units,true)+comparisonGuide()+`<div class="cluster-legends">${legend}</div>`);
   }
   const c=currentCase(),w=610,h=250,box=axes(w,h,'Time (ms)','Source units',['−0.5','0','0.5','1.0','1.5'],['60','5','−50','−105','−160']);
-  const lines=c.units.map(u=>`<polyline data-waveform-cluster="${u.id}" points="${tracePoints(u,box)}" fill="none" stroke="${u.color}" stroke-width="${u.id===selectedUnitId||u.id===draft.target?3:1.8}"/>`).join('');
+  const lines=c.units.map(u=>`<polyline data-waveform-cluster="${u.id}" points="${tracePoints(u,box)}" fill="none" stroke="${u.color}" stroke-width="${u.id===selectedUnitId||u.id===draft.target?3:1.8}"><title>${escapeHtml(u.title)} mean · ${u.spikes.toLocaleString()} spikes</title></polyline>`).join('');
   const legend=c.units.map(u=>`<button class="cluster-legend" data-inspect="${u.id}"><i style="background:${u.color}"></i><strong>${u.title}</strong><span>n = ${u.spikes.toLocaleString()}</span>${clusterTags(u)}</button>`).join('');
-  return plotCard('All clusters · same synthetic recording','Shared axes · illustrative means',`<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="All cluster waveforms on shared axes">${box.markup}${lines}</svg><div class="cluster-legends">${legend}</div>`);
+  return plotCard('All clusters · same synthetic recording','Shared axes · illustrative means',`${comparisonControls()}<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="All cluster waveforms on shared axes">${box.markup}${lines}</svg>${comparisonGuide()}<div class="cluster-legends">${legend}</div>`);
+}
+function comparisonControls(){
+  return `<div class="comparison-controls"><label for="highlight-cluster">Highlight curve<select id="highlight-cluster"><option value="">All cluster means</option>${currentCase().units.map(u=>`<option value="${u.id}">${escapeHtml(u.title)} · n = ${u.spikes.toLocaleString()}</option>`).join('')}</select></label><span id="highlight-label" role="status">Each line is one cluster mean. Axes are shared.</span></div>`;
+}
+function comparisonGuide(){
+  return '<p class="plot-note comparison-guide">One line = one cluster mean, on shared axes. Colors can repeat: hover or focus a cluster below to isolate its line; click to open detail. AI, Inspected and Expert target mark different roles.</p>';
 }
 function gallery(){
-  return `<div class="cluster-gallery">${currentCase().units.map(u=>`<div class="thumbnail-card"><div class="thumbnail-heading"><strong>${u.title}</strong><span>n = ${u.spikes.toLocaleString()}</span></div><div class="thumbnail-viewport"><button class="cluster-thumbnail ${u.id===selectedUnitId?'inspected':''}" data-inspect="${u.id}" aria-label="Inspect ${u.title}">${waveform(u,true)}</button><button class="thumbnail-expand" data-expand-unit="${u.id}" aria-label="Expand ${u.title} waveform" title="Expand waveform">⤢</button></div><div class="thumbnail-meta"><div class="cluster-tags">${clusterTags(u)}</div><small>${currentCase().synthetic===false?'Real mean · all member spikes':'Illustrative mean'} · click for detail</small></div></div>`).join('')}</div>`;
+  const limits=currentCase().synthetic===false?waveformLimits(currentCase().units,true):null;
+  return `<div class="cluster-gallery">${currentCase().units.map(u=>`<div class="thumbnail-card"><div class="thumbnail-heading"><strong>${u.title}</strong><span>n = ${u.spikes.toLocaleString()}</span></div><div class="thumbnail-viewport"><button class="cluster-thumbnail ${u.id===selectedUnitId?'inspected':''}" data-inspect="${u.id}" aria-label="Inspect ${u.title}">${waveform(u,true,limits)}</button><button class="thumbnail-expand" data-expand-unit="${u.id}" aria-label="Expand ${u.title} waveform" title="Expand waveform">⤢</button></div><div class="thumbnail-meta"><div class="cluster-tags">${clusterTags(u)}</div><small>${currentCase().synthetic===false?'Real mean · shared scale':'Illustrative mean · shared scale'} · click for detail</small></div></div>`).join('')}</div>`;
 }
 function tickLabel(value){return Math.abs(value)>=1000?value.toFixed(0):Number(value.toPrecision(3)).toString();}
-function realWaveform(units,meanOnly=false){
+function waveformLimits(units,meanOnly){
+  let low=Infinity,high=-Infinity;
+  for(const u of units.filter(unit=>unit.waveform))for(const values of meanOnly?[u.waveform.mean]:[u.waveform.mean,...u.waveform.traces])for(const value of values){low=Math.min(low,value);high=Math.max(high,value);}
+  const pad=Math.max((high-low)*.08,1e-9);return {low:low-pad,high:high+pad};
+}
+function realWaveform(units,meanOnly=false,limits=null){
   const available=units.filter(u=>u.waveform);
   if(!available.length)return '<p class="tree-note">Waveform is loading.</p>';
   const w=610,h=250,xs=available[0].waveform.x_ms;
-  let low=Infinity,high=-Infinity;
-  for(const u of available)for(const values of meanOnly?[u.waveform.mean]:[u.waveform.mean,...u.waveform.traces])for(const value of values){low=Math.min(low,value);high=Math.max(high,value);}
-  const pad=Math.max((high-low)*.08,1e-9);low-=pad;high+=pad;
+  const {low,high}=limits||waveformLimits(available,meanOnly);
   const xLow=xs[0],xHigh=xs[xs.length-1];
   const box=axes(w,h,'Time (ms)','Amplitude (source units)',Array.from({length:5},(_,i)=>tickLabel(xLow+(xHigh-xLow)*i/4)),Array.from({length:5},(_,i)=>tickLabel(high-(high-low)*i/4)));
   const points=values=>values.map((v,i)=>`${(box.l+(xs[i]-xLow)/(xHigh-xLow)*box.iw).toFixed(2)},${(box.t+(high-v)/(high-low)*box.ih).toFixed(2)}`).join(' ');
-  const lines=available.map(u=>(meanOnly?'':u.waveform.traces.map(values=>`<polyline points="${points(values)}" fill="none" stroke="${u.color}" stroke-opacity=".18" stroke-width="1"/>`).join(''))+`<polyline data-waveform-cluster="${u.id}" points="${points(u.waveform.mean)}" fill="none" stroke="${u.color}" stroke-width="2"/>`).join('');
+  const lines=available.map(u=>(meanOnly?'':u.waveform.traces.map(values=>`<polyline points="${points(values)}" fill="none" stroke="${u.color}" stroke-opacity=".18" stroke-width="1"/>`).join(''))+`<polyline data-waveform-cluster="${u.id}" points="${points(u.waveform.mean)}" fill="none" stroke="${u.color}" stroke-width="2"><title>${escapeHtml(u.title)} mean · ${u.spikes.toLocaleString()} spikes</title></polyline>`).join('');
   return `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Real cluster waveform${available.length>1?'s on shared axes':''}">${box.markup}${lines}</svg>`;
 }
 function realAmplitude(u){
@@ -466,7 +510,16 @@ function realISI(u){
 }
 function savedImage(image){
   const titles={waveform:'Waveform · saved model input',isi:'ISI histogram · saved model input',amplitude:'Amplitude distribution · saved model input',tree:'Aggregation tree · saved model input',small_waveform:'Source waveform · saved model input',large_waveform:'Target waveform · saved model input',merged_isi:'Merged ISI · saved model input'};
-  return plotCard(titles[image.name],`Verified SHA256 ${image.sha256.slice(0,12)}…`,`<img class="saved-evidence-image" src="${image.url}" alt="${titles[image.name]}" loading="lazy" decoding="async">`);
+  const notes={
+    waveform:'Each faint blue line is one sampled spike waveform; the dashed black line is zero amplitude. This saved raw-waveform image has no mean overlay. “n” is the total spike count; “raw displayed” is the sampled count.',
+    small_waveform:'Source cluster: each faint blue line is one sampled spike waveform; dashed black = zero amplitude. No mean overlay. Check axis ranges before comparing separate saved images; All waveforms uses shared axes.',
+    large_waveform:'AI target cluster: each faint blue line is one sampled spike waveform; dashed black = zero amplitude. No mean overlay. Check axis ranges before comparing separate saved images; All waveforms uses shared axes.',
+    isi:'Each bar counts intervals between adjacent spikes in this cluster. X = ISI in ms; Y = interval count. Only intervals up to 50 ms are shown. This is not an autocorrelogram.',
+    merged_isi:'Each bar counts intervals after pooling the original AI pair’s spike times. This is a hypothetical merge, not an executed operation. Changing your proposed target does not recompute this saved image.',
+    amplitude:'Each bar counts spikes in a peak-to-trough amplitude range, using all member spikes. X = amplitude in source units; Y = spike count. This distribution has no time axis.',
+    tree:'Branches show the recorded aggregation topology, not spike amplitude or recording time. X identifies overclusters; Y is the displayed tree height. This image does not show a proposed split result.'
+  };
+  return plotCard(titles[image.name],`Verified SHA256 ${image.sha256.slice(0,12)}…`,`<p class="plot-note">${notes[image.name]}</p><img class="saved-evidence-image" src="${image.url}" alt="${titles[image.name]}" loading="lazy" decoding="async">`);
 }
 function realEvidence(c,u){
   if(!c.evidenceLoaded){
@@ -480,9 +533,12 @@ function realEvidence(c,u){
     }
     return `<p class="tree-note">${c.evidenceError?'Real evidence could not be loaded: '+escapeHtml(c.evidenceError):'Loading verified real waveforms and saved images…'}</p>${c.evidenceError?'<button class="button" id="retry-evidence">Retry</button>':''}`;
   }
+  if(selectedTab==='pair')return renderPairComparison(c);
+  if(selectedTab==='quality')return renderQualityMetrics(c,u);
   if(selectedTab==='overview')return allWaveforms()+'<p class="tree-note">All active clusters in this exact pre-decision checkpoint. These extra mean waveforms were computed locally from MAT spike rows, not sent to the historical model.</p>';
-  if(selectedTab==='gallery')return gallery()+'<p class="tree-note">Real mean waveforms and population counts for this saved state. Click Expand for a mean plus up to 24 chronological traces.</p>';
-  if(selectedTab==='stability')return plotCard(`${u.title} · real amplitude over time`,'Extra reviewer evidence · up to 500 chronological rows',realAmplitude(u))+'<p class="tree-note">Time is in seconds; amplitude is in source units. Spatial coordinates were not imported, so no location plot is shown.</p>';
+  if(selectedTab==='gallery')return gallery()+'<p class="tree-note">Thumbnail means use the same time and amplitude scales across this checkpoint. Counts are total member spikes. Expanded detail uses its own labeled axes and adds up to 24 chronological traces.</p>';
+  if(selectedTab==='stability')return plotCard(`${u.title} · real amplitude over time`,'Extra reviewer evidence · up to 500 chronological rows',realAmplitude(u),'<p class="plot-note">One dot = one sampled spike. X = recording time in seconds; Y = peak-to-trough amplitude in source units. This view shows amplitude drift, not spike locations.</p>');
+  if(selectedTab==='amplitude')return savedImage(c.images.find(image=>image.name==='amplitude'));
   const modelIds=c.review_mode==='manual'?[]:c.pair||[c.source],modelObject=modelIds.includes(u.id);
   if(selectedTab==='tree'){
     const image=c.images.find(i=>i.name==='tree');
@@ -490,11 +546,12 @@ function realEvidence(c,u){
   }
   if(selectedTab==='timing'){
     const image=c.images.find(i=>i.name===(c.phase_id==='phase1'?'isi':'merged_isi'));
-    return (modelObject&&image?savedImage(image):plotCard(`${u.title} · real ISI histogram`,'Extra reviewer evidence · all member spikes',realISI(u)))+`<p class="tree-note">ISI is the interval between adjacent sorted spikes, not an autocorrelogram. ${modelObject?'The image above is the original saved model input.':'This histogram was derived locally from the checkpoint.'}</p>`;
+    const savedISI=modelObject&&image;
+    return (savedISI?savedImage(image):plotCard(`${u.title} · real ISI histogram`,'Extra reviewer evidence · all member spikes',realISI(u),'<p class="plot-note">Each bar counts intervals between adjacent spikes in this cluster, up to 50 ms. X = interval in ms; Y = count. This is not an autocorrelogram. No quality threshold is inferred.</p>'))+(savedISI&&c.pair?`<p class="tree-note">Saved AI pair: ${unitLabel(c,c.source)} + ${unitLabel(c,c.pair[1])}. Your proposed target: ${draft.action==='MERGE'?unitLabel(c,draft.target):'none'}. The displayed histogram always belongs to the saved AI pair.</p>`:'');
   }
-  if(modelObject)return c.images.map(savedImage).join('')+'<p class="tree-note">Original frozen Phase 1 four-image / Phase 2 three-image evidence, verified against recorded image hashes. Saved model traces use the historical SHA256 member sample (up to 500); new reviewer views use at most 24 chronological traces.</p>';
-  return plotCard(`${u.title} · real waveform`,'Extra reviewer evidence · mean + up to 24 traces',waveform(u))+
-    plotCard(`${u.title} · real ISI histogram`,'All member spikes',realISI(u))+
+  const savedWave=savedWaveformFor(c,u);
+  if(savedWave)return savedImage(savedWave)+'<p class="tree-note">Cluster detail shows one waveform image. Use the tabs for ISI, amplitude and tree evidence; choose another viewing cluster to inspect its waveform.</p>';
+  return plotCard(`${u.title} · real waveform`,'Extra reviewer evidence · mean + up to 24 traces',waveformLegend(u)+waveform(u))+
     `<p class="tree-note">${c.review_mode==='manual'?'Initial MAT hierarchy · manual review.':`Inspecting comparison ${u.title}; the review object remains ${sourceUnit(c).title}.`}</p>`;
 }
 function syncPlotTypography(){
@@ -621,8 +678,19 @@ function treePlot(c){
 }
 const plotCard=(title,meta,body,extra='')=>`<div class="plot-card"><div class="plot-heading"><h3>${title}</h3><span>${meta}</span></div>${body}${extra}</div>`;
 function renderEvidence(){
-  const c=currentCase(),u=currentUnit(),pairTiming=!!c.pair&&selectedUnitId===c.source;
-  $$('[data-tab]').forEach(b=>{b.classList.toggle('active',b.dataset.tab===selectedTab);b.setAttribute('aria-selected',String(b.dataset.tab===selectedTab));});
+  const c=currentCase();
+  if(selectedTab==='pair'&&selectedUnitId!==c.source){selectedUnitId=c.source;renderCase();return;}
+  const u=currentUnit(),pairTiming=!!c.pair&&selectedUnitId===c.source;
+  $('[data-tab="pair"]').hidden=c.synthetic!==false||c.units.length<2;
+  $('[data-tab="quality"]').hidden=c.synthetic!==false;
+  const amplitudeTab=$('[data-tab="amplitude"]');
+  amplitudeTab.hidden=!(c.synthetic===false&&u.id===c.source&&c.images.some(image=>image.name==='amplitude'));
+  if(selectedTab==='amplitude'&&amplitudeTab.hidden)selectedTab='detail';
+  $$('[data-tab]').forEach(b=>{const active=b.dataset.tab===selectedTab;b.classList.toggle('active',active);b.setAttribute('aria-selected',String(active));b.tabIndex=active?0:-1;b.id='evidence-tab-'+b.dataset.tab;b.setAttribute('aria-controls','evidence-content');});
+  $('#evidence-content').setAttribute('aria-labelledby','evidence-tab-'+selectedTab);
+  $('#evidence-context').hidden=selectedTab==='pair';
+  $('#evidence-context').innerHTML=`<label for="inspected-cluster">Viewing cluster<select id="inspected-cluster">${c.units.map(unit=>`<option value="${unit.id}" ${unit.id===u.id?'selected':''}>${escapeHtml(unit.title)} · n = ${unit.spikes.toLocaleString()}</option>`).join('')}</select></label><div><span class="cluster-tags">${clusterTags(u)}</span><p>Review object: ${escapeHtml(sourceUnit(c).title)}${c.pair?' + '+escapeHtml(unitLabel(c,c.pair[1])):''}. Viewing another cluster keeps the review object fixed.</p></div>`;
+  $('#inspected-cluster').onchange=e=>inspectUnit(e.target.value);
   let body='';
   if(c.synthetic===false){
     body=realEvidence(c,u);
@@ -631,16 +699,14 @@ function renderEvidence(){
   }else if(selectedTab==='gallery'){
     body=gallery()+'<p class="tree-note">Colors supplement stable cluster IDs. Counts describe the synthetic population, not the number of drawn traces.</p>';
   }else if(selectedTab==='detail'){
-    body=plotCard(`${u.title} · waveform detail`,'24 illustrative traces + mean',waveform(u))+
-      `<div class="plot-row">${plotCard('Autocorrelogram','Illustrative timing',correlogram(u))}${plotCard('Amplitude over time','Illustrative stability',amplitude(u))}</div>`+
+    body=plotCard(`${u.title} · waveform detail`,'24 illustrative traces + mean',waveformLegend(u)+waveform(u))+
       `<p class="tree-note">Inspecting ${u.title}; n = ${u.spikes.toLocaleString()}. Your review still concerns ${sourceUnit(c).title}. These demo views do not reproduce the frozen main-pipeline PNGs.</p>`;
   }else if(selectedTab==='timing'){
-    body=plotCard(pairTiming?'AI pair · cross-correlogram':`${u.title} · autocorrelogram`,'Lag window: ±25 ms',correlogram(u,pairTiming,true),'<p class="plot-note">Illustrative timing only; a correlogram is not the main pipeline’s ISI histogram.</p>')+
-      plotCard(`${u.title} · amplitude over time`,'Sampled events',amplitude(u,true))+
+    body=plotCard(pairTiming?'AI pair · cross-correlogram':`${u.title} · autocorrelogram`,'Lag window: ±25 ms',correlogram(u,pairTiming,true),'<p class="plot-note">Each bar counts illustrative spike pairs at a time lag. X = lag in ms; Y = count. The shaded band marks lags near zero. A correlogram is not an ISI histogram.</p>')+
       '<div class="annotation"><span>◈</span><p>Interpret timing evidence in context, including spike count and recording stability.</p></div>';
   }else if(selectedTab==='stability'){
-    body=plotCard(`${u.title} · amplitude over time`,'20 min',amplitude(u,true))+
-      `<div class="plot-row">${plotCard('Event positions','Synthetic locations',locationPlot(u))}<div class="plot-card"><div class="plot-heading"><h3>Evidence provenance</h3></div><div class="tree-note"><span class="pill amber">Additional reviewer evidence</span><p style="margin-top:12px">Locations are invented for this demo and are not in the main pipeline’s observation fields. Viewing this tab is recorded separately.</p></div></div></div>`;
+    body=plotCard(`${u.title} · amplitude over time`,'20 min',amplitude(u,true),'<p class="plot-note">One dot = one illustrative spike. X = recording time in minutes; Y = amplitude in source units. Teal and coral indicate illustrative families, not verified subclusters.</p>')+
+      `<div class="plot-row">${plotCard('Event positions','Synthetic locations',locationPlot(u),'<p class="plot-note">One dot = one invented event position. X = lateral position; Y = depth, both in µm. Colors indicate illustrative families.</p>')}<div class="plot-card"><div class="plot-heading"><h3>Evidence provenance</h3></div><div class="tree-note"><span class="pill amber">Additional reviewer evidence</span><p style="margin-top:12px">Locations are invented for this demo and are not in the main pipeline’s observation fields. Viewing this tab is recorded separately.</p></div></div></div>`;
   }else{
     body=plotCard(`${u.title} · split tree`,'Synthetic topology · read-only',treePlot(u))+
       `<div class="annotation"><span>◈</span><p>${u.split?'Two illustrative children are available. This prototype records proposals without splitting any data.':'This node is a leaf. A further tree split is unavailable, even if the model recommends it.'}</p></div>`;
@@ -649,19 +715,36 @@ function renderEvidence(){
   attachPlotZoom($('#evidence-content'));
   syncPlotTypography();
   $$('[data-inspect]').forEach(button=>button.onclick=()=>inspectUnit(button.dataset.inspect));
+  const highlightSelect=$('#highlight-cluster');
+  if(highlightSelect){
+    const card=highlightSelect.closest('.plot-card');
+    const highlight=id=>{
+      const unit=c.units.find(item=>item.id===id);card.classList.toggle('comparison-highlight',!!unit);
+      card.querySelectorAll('[data-waveform-cluster]').forEach(line=>line.classList.toggle('highlighted-curve',line.dataset.waveformCluster===id));
+      card.querySelectorAll('.cluster-legend').forEach(item=>item.classList.toggle('highlighted-legend',item.dataset.inspect===id));
+      $('#highlight-label').textContent=unit?`${unit.title} mean · n = ${unit.spikes.toLocaleString()}. Other means are faded.`:'Each line is one cluster mean. Axes are shared.';
+    };
+    highlightSelect.onchange=()=>highlight(highlightSelect.value);
+    $$('.cluster-legend').forEach(button=>{
+      const show=()=>highlight(button.dataset.inspect),restore=()=>highlight(highlightSelect.value);
+      button.onpointerenter=show;button.onpointerleave=restore;button.onfocus=show;button.onblur=restore;
+    });
+  }
   $$('[data-expand-unit]').forEach(button=>button.onclick=()=>{
     const unit=c.units.find(u=>u.id===button.dataset.expandUnit),holder=document.createElement('div');
     holder.innerHTML=waveform(unit);openExpandedPlot(`${unit.title} · waveform detail`,holder.firstElementChild);
+    $('#modal-content .plot-heading').insertAdjacentHTML('afterend',waveformLegend(unit));
   });
   if($('#retry-evidence'))$('#retry-evidence').onclick=()=>{c.evidenceError=null;renderEvidence();};
-  const extra=c.review_mode==='manual'||['overview','gallery','stability'].includes(selectedTab)||!(c.pair||[c.source]).includes(selectedUnitId);
+  attachAnalysisControls();
+  const extra=c.review_mode==='manual'||['overview','gallery','stability','pair','quality'].includes(selectedTab)||!(c.pair||[c.source]).includes(selectedUnitId);
   $('.evidence-footer>span:first-child').innerHTML=`<span class="teal-dot"></span>${extra?'Additional reviewer evidence':c.synthetic===false?'Verified saved model input':'Scripted demo evidence'}`;
 }
 function modal(title,body){$('#info-modal').classList.remove('plot-modal');$('#modal-title').textContent=title;$('#modal-content').innerHTML=body;if(!$('#info-modal').open)$('#info-modal').showModal();}
 function showPacket(){
   const c=currentCase();
   if(c.synthetic===false){
-    modal(c.review_mode==='manual'?'MAT input · manual review':'Saved model input · real data',`<div class="modal-prose"><p><strong>${escapeHtml(c.dataset_id)} · ${escapeHtml(c.step_id)}</strong></p><p>${c.review_mode==='manual'?'These initial MAT clusters have no model request or decision.':'The historical model received these numeric observations and the saved images.'} Expert terminal labels and annotations were not imported. No new model request is running.</p></div><div class="packet-code">${escapeHtml(JSON.stringify({phase:c.phase_id,metrics:c.metrics,state_sha256:c.state_sha256,mat_sha256:c.mat_sha256,image_sha256:c.image_sha256,request_sha256:c.request_sha256,request_hash_status:c.request_hash_status},null,2))}</div>`);return;
+    modal(c.review_mode==='manual'?'MAT input · manual review':'Saved model input · real data',`<div class="modal-prose"><p><strong>${escapeHtml(c.dataset_id)} · ${escapeHtml(c.step_id)}</strong></p><p>${c.review_mode==='manual'?'These initial MAT clusters have no model request or decision.':'The historical model received these numeric observations and the saved images.'} Expert terminal labels are excluded. The Jacob reason library is separate human-reference vocabulary and was not part of the model input. No new model request is running.</p></div><div class="packet-code">${escapeHtml(JSON.stringify({phase:c.phase_id,metrics:c.metrics,state_sha256:c.state_sha256,mat_sha256:c.mat_sha256,image_sha256:c.image_sha256,request_sha256:c.request_sha256,request_hash_status:c.request_hash_status},null,2))}</div>`);return;
   }
   modal('Scripted input · not a live request',`<div class="modal-prose"><p>No model has analyzed these signals. This is a <strong>synthetic case description</strong>, not a reproduction of a frozen main-pipeline request.</p></div><table class="packet-table"><tr><th>Recording</th><td class="mono">${c.dataset_id}</td></tr><tr><th>Snapshot</th><td class="mono">synthetic-${c.id}-v2</td></tr><tr><th>Agent</th><td>Agent 1 · scripted demo</td></tr><tr><th>AI objects</th><td>${(c.pair||[c.source]).map(id=>unitLabel(c,id)).join(' + ')}</td></tr><tr><th>Scripted evidence</th><td>Waveforms, timing, amplitude and tree availability for the AI objects</td></tr><tr><th>Extra reviewer views</th><td>All-cluster comparison, gallery, location, and other clusters</td></tr><tr><th>Backend phase actions</th><td>${Core.PHASE_ACTIONS[c.phase_id].join(' · ')}</td></tr><tr><th>Request/image hashes</th><td>Unavailable · no real request exists</td></tr></table><div class="packet-code">AI action: ${c.ai}\nAvailable for expert review: ${allowed(c).includes(c.ai)?'yes':'no — invalid leaf split'}</div><p class="modal-prose" style="margin-top:16px">Expert MERGE corrections may propose a different target. DEFER is saved as a review status. Neither is sent to the controller.</p>`);
 }
@@ -680,7 +763,15 @@ function showAbout(){
 $$('[data-view]').forEach(b=>b.onclick=()=>showView(b.dataset.view));
 $('.brand').onclick=e=>{e.preventDefault();showView('review');};
 $$('[data-filter]').forEach(b=>b.onclick=()=>{filter=b.dataset.filter;$$('[data-filter]').forEach(x=>x.classList.toggle('active',x===b));renderQueue();});
-$$('[data-tab]').forEach(b=>b.onclick=()=>{selectedTab=b.dataset.tab;recordEvidence();renderEvidence();});
+$$('[data-tab]').forEach(b=>{
+  b.onclick=()=>{selectedTab=b.dataset.tab;recordEvidence();renderEvidence();};
+  b.onkeydown=e=>{
+    if(!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;
+    e.preventDefault();const tabs=$$('[data-tab]').filter(tab=>!tab.hidden),index=tabs.indexOf(b);
+    const next=e.key==='Home'?tabs[0]:e.key==='End'?tabs[tabs.length-1]:tabs[(index+(e.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length];
+    next.click();next.focus();
+  };
+});
 $('#case-search').addEventListener('input',renderQueue);
 $('#file-filter').addEventListener('change',renderQueue);
 $('#phase-filter').addEventListener('change',renderQueue);
@@ -709,12 +800,16 @@ $('#reviewer-name').value=state.annotator;
 $('#reviewer-name').addEventListener('input',()=>{state.annotator=$('#reviewer-name').value.trim();profileName=state.annotator;persist();scheduleProfileSave();});
 $('#agree-button').onclick=()=>setAgreement(true);
 $('#disagree-button').onclick=()=>setAgreement(false);
-$('#merge-target').onchange=()=>{draft.target=$('#merge-target').value;isDirty=true;$('#form-error').textContent='';renderActions();renderEvidence();};
+$('#merge-target').onchange=()=>{draft.target=$('#merge-target').value;isDirty=true;$('#form-error').textContent='';if(mode==='real'){selectedTab='pair';recordEvidence();}renderActions();renderEvidence();};
 for(const type of ['rationale','evidence'])$('#disagree-'+type).onchange=()=>{
   draft.disagreement_types=['rationale','evidence'].filter(t=>$('#disagree-'+t).checked);isDirty=true;$('#form-error').textContent='';renderActions();
 };
 $('#save-button').onclick=saveReview;
-$('#defer-button').onclick=()=>{setAgreement(false);draft.action='DEFER';renderActions();$('#review-note').focus();toast('Defer selected. Explain what evidence is missing, then save.');};
+$('#defer-button').onclick=()=>{setAgreement(false);draft.action='DEFER';draft.sufficiency='insufficient';renderActions();renderEvidence();$('#missing-evidence-note').focus();toast('Defer selected. Choose or describe the missing evidence, then save.');};
+$('#judgment-confidence').onchange=()=>{draft.confidence=$('#judgment-confidence').value||null;isDirty=true;$('#form-error').textContent='';};
+$('#evidence-sufficiency').onchange=()=>{draft.sufficiency=$('#evidence-sufficiency').value;if(draft.sufficiency!=='insufficient'){draft.missing=[];draft.missing_note='';}isDirty=true;$('#form-error').textContent='';renderJudgmentDetails();};
+$$('.missing-evidence-options input').forEach(input=>input.onchange=()=>{draft.missing=$$('.missing-evidence-options input:checked').map(item=>item.value);isDirty=true;$('#form-error').textContent='';});
+$('#missing-evidence-note').oninput=()=>{draft.missing_note=$('#missing-evidence-note').value;isDirty=true;$('#form-error').textContent='';};
 $('#export-button').onclick=exportFeedback;$('#history-export').onclick=exportFeedback;
 $('#history-link').onclick=()=>showView('history');
 $('#packet-button').onclick=showPacket;

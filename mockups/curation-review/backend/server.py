@@ -18,18 +18,21 @@ import re
 import secrets
 import sqlite3
 import sys
+import threading
 import unicodedata
 from urllib.parse import parse_qs, unquote, urlsplit
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from dataset_inputs import DatasetManager, ALLOWED, MAX_UPLOAD
+from jacob_reasons import DEFAULT_SEED, load_seed, VERSION as REASON_SEED_VERSION
 
 ROOT = Path(__file__).resolve().parents[3]
 STATIC = ROOT / "mockups/curation-review/dist"
 STORE = ROOT / "output/curation_review_local"
 SCHEMA = "spikeagent-human-review-v3"
 PHASE_ACTIONS = {"phase1": ["KEEP", "SPLIT", "DISCARD"], "phase2": ["MERGE", "NOT_MERGE", "DISCARD"]}
-TABS = {"detail", "overview", "gallery", "timing", "stability", "tree"}
+TABS = {"detail", "overview", "gallery", "timing", "amplitude", "stability", "tree", "pair", "quality"}
+MISSING_EVIDENCE = {"waveform", "timing", "amplitude", "spatial", "split_tree", "recording_context", "other"}
 
 
 def now():
@@ -79,6 +82,23 @@ def build_review(case, draft, context):
     target = units[target_id]["cluster_id"] if action == "MERGE" else None
     reason = clean_reason(string(draft.get("reason", ""), 2000))
     note, positive = string(draft.get("note", "")), string(draft.get("positive", ""))
+    confidence = draft.get("confidence")
+    sufficiency = draft.get("sufficiency", "unspecified")
+    missing = draft.get("missing", [])
+    missing_note = string(draft.get("missing_note", ""), 2000)
+    if confidence is not None and (not isinstance(confidence,str) or confidence not in ("high","medium","low")):
+        raise ValueError("Invalid judgment confidence")
+    if not isinstance(sufficiency,str) or sufficiency not in ("unspecified","sufficient","insufficient"):
+        raise ValueError("Invalid evidence sufficiency")
+    if not isinstance(missing,list) or any(not isinstance(item,str) or item not in MISSING_EVIDENCE for item in missing):
+        raise ValueError("Invalid missing evidence categories")
+    missing = list(dict.fromkeys(missing))
+    if sufficiency!="insufficient" and (missing or missing_note):
+        raise ValueError("Mark evidence as insufficient when requesting additional evidence")
+    if sufficiency=="insufficient" and not missing and not missing_note and not note:
+        raise ValueError("Choose missing evidence or explain what is needed")
+    if "other" in missing and not missing_note and not note:
+        raise ValueError("Explain the other missing evidence")
     differences = set(types)
     if not manual and action != case["ai"]:
         differences.add("action")
@@ -86,7 +106,7 @@ def build_review(case, draft, context):
         differences.add("target")
     if agree and differences:
         raise ValueError("Agreement must preserve the action, merge target and explanation")
-    if ((not agree and not manual) or (manual and action!="KEEP")) and not reason and not note:
+    if ((not agree and not manual) or (manual and action!="KEEP")) and not reason and not note and not (action=="DEFER" and sufficiency=="insufficient" and (missing or missing_note)):
         raise ValueError("Add a reason or note for disagreement")
     if not manual and not agree and not differences:
         raise ValueError("Mark rationale/evidence when the action and target are unchanged")
@@ -102,6 +122,11 @@ def build_review(case, draft, context):
         raise ValueError("Unknown evidence object/tab")
     if type(context.get("rationale_viewed", False)) is not bool:
         raise ValueError("Invalid rationale exposure")
+    comparisons = context.get("pair_comparisons", [])
+    if (not isinstance(comparisons,list) or len(comparisons)>len(units)
+            or any(not isinstance(pair,list) or len(pair)!=2 or pair[0]!=case["source"]
+                   or any(not isinstance(i,str) or i not in units for i in pair) or pair[0]==pair[1] for pair in comparisons)):
+        raise ValueError("Invalid compared cluster pair")
     result = {k: case[k] for k in ("dataset_id", "run_id", "step_id", "phase_id", "state_id", "state_sha256",
         "request_sha256", "image_sha256", "mat_sha256", "checkpoint_sha256", "request_hash_status", "agent_id", "agent_kind")}
     result.update(schema=SCHEMA, synthetic=False, review_mode="manual" if manual else "historical_model_review", case_id=case["id"],
@@ -113,6 +138,8 @@ def build_review(case, draft, context):
         expert_pair=[source, target] if target is not None else None,
         expert_reason="" if agree else reason, expert_note="" if agree else note,
         expert_positive_comment=positive if agree or manual else "", review_status="deferred" if action == "DEFER" else "reviewed",
+        expert_confidence=confidence, evidence_sufficiency=sufficiency, missing_evidence=missing,
+        missing_evidence_note=missing_note,
         action=action, execution_status="not_executed", phase_contract_compatible=action in PHASE_ACTIONS[case["phase_id"]],
         spike_counts={str(u["cluster_id"]): u["spikes"] for u in case["units"]},
         displayed_trace_count=case["displayed_trace_count"], reviewer_trace_limit=24, waveform_units="source units",
@@ -120,7 +147,8 @@ def build_review(case, draft, context):
         viewed_cluster_ids=[units[i]["cluster_id"] for i in dict.fromkeys(viewed)],
         model_visible_cluster_set=[units[i]["cluster_id"] for i in model_ids], viewed_tabs=list(dict.fromkeys(tabs)),
         rationale_viewed=context.get("rationale_viewed", False),
-        additional_evidence_viewed=manual or any(t in ("overview", "gallery", "stability") for t in tabs) or any(i not in model_ids for i in viewed),
+        pair_comparisons=[[units[i]["cluster_id"] for i in pair] for pair in comparisons],
+        additional_evidence_viewed=manual or any(t in ("overview", "gallery", "stability", "pair", "quality") for t in tabs) or any(i not in model_ids for i in viewed),
         timestamp=now(), annotator=string(context.get("annotator", ""), 100) or None)
     return result
 
@@ -146,6 +174,10 @@ class ReviewStore:
                 uses INTEGER NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT NOT NULL);
               CREATE TABLE IF NOT EXISTS profiles (
                 reviewer TEXT PRIMARY KEY, annotator TEXT NOT NULL, updated_at TEXT NOT NULL);
+              CREATE TABLE IF NOT EXISTS reason_sources (
+                key TEXT NOT NULL, source_id TEXT NOT NULL, payload TEXT NOT NULL,
+                PRIMARY KEY(key,source_id));
+              CREATE TABLE IF NOT EXISTS library_meta (name TEXT PRIMARY KEY,payload TEXT NOT NULL);
             """)
         self.path.chmod(0o600)
 
@@ -168,7 +200,38 @@ class ReviewStore:
         key = reason_key(prefix)
         with self.connect() as db:
             rows = db.execute("SELECT * FROM reasons WHERE substr(key,1,?)=? ORDER BY uses DESC,last_used_at DESC,key LIMIT ?", (len(key), key, limit)).fetchall()
-        return [dict(r) for r in rows]
+            sources=self._sources(db)
+        return [dict(r,sources=sources.get(r["key"],[])) for r in rows]
+
+    def _sources(self, db):
+        result={}
+        for row in db.execute("SELECT key,payload FROM reason_sources ORDER BY source_id"):
+            result.setdefault(row["key"],[]).append(json.loads(row["payload"]))
+        return result
+
+    def _source(self, db, key, source):
+        payload=json.dumps(source,ensure_ascii=False,sort_keys=True)
+        sid=hashlib.sha256(payload.encode()).hexdigest()
+        db.execute("INSERT OR IGNORE INTO reason_sources VALUES(?,?,?)",(key,sid,payload))
+
+    def seed_reasons(self, path):
+        seed=load_seed(path)
+        timestamp=now();added=0
+        with self.connect() as db:
+            for entry in seed["reasons"]:
+                text=clean_reason(entry["text"]);key=reason_key(text)
+                added+=db.execute("INSERT OR IGNORE INTO reasons VALUES(?,?,?,?,?,?)",(key,text,"jacob-original-workbook",0,timestamp,timestamp)).rowcount
+                self._source(db,key,dict(kind="jacob",version=REASON_SEED_VERSION,references=entry["sources"]))
+            meta={k:v for k,v in seed.items() if k!="reasons"}
+            meta["unique_reasons"]=len(seed["reasons"])
+            db.execute("INSERT OR REPLACE INTO library_meta VALUES(?,?)",("jacob",json.dumps(meta,ensure_ascii=False)))
+        return dict(added=added,unique_reasons=len(seed["reasons"]))
+
+    def reason_status(self):
+        with self.connect() as db:
+            row=db.execute("SELECT payload FROM library_meta WHERE name='jacob'").fetchone()
+            total=db.execute("SELECT count(*) FROM reasons").fetchone()[0]
+        return dict(total=total,jacob=json.loads(row["payload"]) if row else None)
 
     def import_reasons(self, texts, provenance="browser-review-history"):
         if not isinstance(texts, list) or len(texts) > 5000:
@@ -180,6 +243,7 @@ class ReviewStore:
             for text in normalized:
                 if text:
                     added+=db.execute("INSERT OR IGNORE INTO reasons VALUES(?,?,?,?,?,?)", (reason_key(text), text, provenance, 0, timestamp, timestamp)).rowcount
+                    self._source(db,reason_key(text),dict(kind="user_imported",provenance=provenance))
         return dict(added=added,duplicates=sum(bool(t) for t in normalized)-added)
 
     def profile(self, reviewer, annotator=None):
@@ -221,10 +285,15 @@ class ReviewStore:
                     raise ValueError("Invalid backup evidence exposure")
             d=dict(agree=r.get("expert_agree"),action=r.get("action"),target=unit_map.get(r.get("expert_merge_target"),""),
                 reason=r.get("expert_reason",""),note=r.get("expert_note",""),positive=r.get("expert_positive_comment",""),
-                disagreement_types=r.get("disagreement_types",[]))
+                disagreement_types=r.get("disagreement_types",[]),confidence=r.get("expert_confidence"),
+                sufficiency=r.get("evidence_sufficiency","unspecified"),missing=r.get("missing_evidence",[]),missing_note=r.get("missing_evidence_note",""))
             context=dict(annotator=r.get("annotator") or "",viewed_tabs=r.get("viewed_tabs",["detail"]),
                 viewed_cluster_ids=[unit_map[i] for i in r.get("viewed_cluster_ids",[]) if i in unit_map],
                 visible_cluster_ids=[unit_map[i] for i in r.get("visible_cluster_set",[]) if i in unit_map],rationale_viewed=r.get("rationale_viewed",False))
+            pairs=r.get("pair_comparisons",[])
+            if (not isinstance(pairs,list) or any(not isinstance(pair,list) or len(pair)!=2 or any(type(i) is not int or i not in unit_map for i in pair) for pair in pairs)):
+                raise ValueError("Invalid backup pair comparison exposure")
+            context["pair_comparisons"]=[[unit_map[i] for i in pair] for pair in pairs]
             rebuilt=build_review(c,d,context)
             rebuilt["reviewer_id"]=reviewer
             rebuilt["imported_from"]=dict(reviewer_id=payload.get("reviewer_id"),timestamp=r.get("timestamp"))
@@ -238,8 +307,10 @@ class ReviewStore:
             existing={row[0] for row in db.execute("SELECT case_id FROM reviews WHERE reviewer=?",(reviewer,))}
             pending=[r for r in prepared if r["case_id"] not in existing]
             if not preview:
+                sources=self._sources(db)
                 batch=hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).hexdigest()
                 for i,r in enumerate(pending):
+                    r["reason_sources"]=sources.get(reason_key(r["expert_reason"]),[]) or ([dict(kind="user_imported",provenance="feedback-backup")] if r["expert_reason"] else [])
                     result=dict(review=r,revision=1,case_id=r["case_id"])
                     db.execute("INSERT INTO reviews VALUES(?,?,?,?)",(reviewer,r["case_id"],1,json.dumps(r,ensure_ascii=False)))
                     request_id="import-"+hashlib.sha256((reviewer+batch+str(i)).encode()).hexdigest()
@@ -247,10 +318,12 @@ class ReviewStore:
                     if r["expert_reason"]:
                         text=r["expert_reason"];timestamp=now()
                         db.execute("INSERT OR IGNORE INTO reasons VALUES(?,?,?,?,?,?)",(reason_key(text),text,"feedback-backup",0,timestamp,timestamp))
+                        self._source(db,reason_key(text),dict(kind="user_imported",provenance="feedback-backup"))
                 for text in reason_texts:
                     if text:
                         timestamp=now()
                         reasons_added+=db.execute("INSERT OR IGNORE INTO reasons VALUES(?,?,?,?,?,?)",(reason_key(text),text,"feedback-backup",0,timestamp,timestamp)).rowcount
+                        self._source(db,reason_key(text),dict(kind="user_imported",provenance="feedback-backup"))
         return dict(preview=preview,valid=len(prepared),added=0 if preview else len(pending),available_to_import=len(pending),skipped_existing=len(prepared)-len(pending),reasons_added=reasons_added)
 
     def write(self, reviewer, case, body, undo=False):
@@ -276,6 +349,7 @@ class ReviewStore:
                 raise ValueError("No saved review to undo")
             if review:
                 review["reviewer_id"] = reviewer
+                review["reason_sources"] = self._sources(db).get(reason_key(review["expert_reason"]),[]) or ([dict(kind="reviewer",provenance="reviewer-entered-real-review")] if review["expert_reason"] else [])
             result = dict(review=review, revision=revision + 1, case_id=case["id"])
             db.execute("INSERT OR REPLACE INTO reviews VALUES(?,?,?,?)", (reviewer, case["id"], revision + 1, json.dumps(review, ensure_ascii=False)))
             db.execute("INSERT INTO events(request_id,reviewer,case_id,event,timestamp,payload) VALUES(?,?,?,?,?,?)", (request_id, reviewer, case["id"], "review_undone" if undo else "review_saved", now(), json.dumps(result, ensure_ascii=False)))
@@ -283,6 +357,7 @@ class ReviewStore:
                 text = review["expert_reason"]; timestamp = now()
                 db.execute("""INSERT INTO reasons VALUES(?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET
                   uses=uses+1,last_used_at=excluded.last_used_at""", (reason_key(text), text, "reviewer-entered-real-review", 1, timestamp, timestamp))
+                self._source(db,reason_key(text),dict(kind="reviewer",provenance="reviewer-entered-real-review"))
             return result
 
     def revisions(self, reviewer):
@@ -293,6 +368,8 @@ class ReviewStore:
         with self.connect() as db:
             rows = db.execute("SELECT * FROM events WHERE reviewer=? ORDER BY id", (reviewer,)).fetchall()
             reasons = [dict(r) for r in db.execute("SELECT * FROM reasons ORDER BY key")]
+            sources=self._sources(db)
+            for reason in reasons:reason["sources"]=sources.get(reason["key"],[])
         return dict(schema=SCHEMA, synthetic=False, exported_at=now(), execution_status="not_executed", reviewer_id=reviewer,
             reviews=[r["review"] for r in self.reviews(reviewer).values()],
             events=[dict(type=r["event"], request_id=r["request_id"], timestamp=r["timestamp"], **json.loads(r["payload"])) for r in rows],
@@ -300,11 +377,22 @@ class ReviewStore:
 
 
 class ReviewApplication:
-    def __init__(self, bundle_path, db_path):
+    def __init__(self, bundle_path, db_path, reason_seed=None):
         self.bundle_path = Path(bundle_path).resolve()
         self.datasets = DatasetManager(self.bundle_path,Path(db_path).resolve().parent/"manager")
         self.store = ReviewStore(db_path)
+        if reason_seed is not None and Path(reason_seed).is_file():
+            self.store.seed_reasons(reason_seed)
+        self.analysis_service = None
+        self.analysis_lock = threading.Lock()
         self.csrf = secrets.token_urlsafe(32)
+
+    def analysis(self, case_id, cluster_id=None, target_id=None):
+        with self.analysis_lock:
+            if self.analysis_service is None:
+                from review_analysis import AnalysisService
+                self.analysis_service=AnalysisService(self.datasets)
+        return self.analysis_service.get(case_id,cluster_id,target_id)
 
     @property
     def cases(self):
@@ -379,11 +467,19 @@ class Handler(BaseHTTPRequestHandler):
                     sampling_rate_hz=bundle["sampling_rate_hz"], provenance=bundle["provenance"], cases=bundle["cases"]))
             elif path.startswith("/api/evidence/"):
                 self.reply(self.app.evidence(path.split("/", 3)[3]))
+            elif path.startswith("/api/analysis/"):
+                cluster=query.get("cluster",[None])[0]
+                target=query.get("target",[None])[0]
+                self.reply(self.app.analysis(path.split("/",3)[3],cluster,target))
             elif path.startswith("/api/assets/"):
                 self.reply(self.app.asset(path.split("/", 3)[3]), content_type="image/png")
             elif path == "/api/reasons":
                 prefix = string(query.get("prefix", [""])[0], 2000)
-                self.reply(dict(reasons=self.app.store.reasons(prefix)))
+                limit=int(query.get("limit",[20])[0])
+                if not 1<=limit<=5000:raise ValueError("Reason result limit must be 1–5000")
+                self.reply(dict(reasons=self.app.store.reasons(prefix,limit)))
+            elif path == "/api/reasons/status":
+                self.reply(self.app.store.reason_status())
             elif path == "/api/reasons/export":
                 self.reply(dict(schema="spikeagent-reason-library-v1",exported_at=now(),reasons=self.app.store.export(self.reviewer())["reason_library"]))
             elif path == "/api/profile":
@@ -398,7 +494,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 name = "index.html" if path == "/" else path.lstrip("/")
                 allowed_files = {"index.html": "text/html; charset=utf-8", "style.css": "text/css; charset=utf-8",
-                    "app.js": "text/javascript; charset=utf-8", "inputs.js":"text/javascript; charset=utf-8", "review-core.js": "text/javascript; charset=utf-8"}
+                    "app.js": "text/javascript; charset=utf-8", "analysis.js":"text/javascript; charset=utf-8", "inputs.js":"text/javascript; charset=utf-8", "review-core.js": "text/javascript; charset=utf-8"}
                 if name not in allowed_files:
                     raise KeyError("Unknown static file")
                 self.reply((STATIC / name).read_bytes(), content_type=allowed_files[name])
@@ -490,8 +586,8 @@ class LocalReviewServer(ThreadingHTTPServer):
         super().server_close()
 
 
-def make_server(port=8765, bundle=STORE / "jacob_ch31_v1", db=STORE / "reviews.sqlite3"):
-    application = ReviewApplication(bundle, db)
+def make_server(port=8765, bundle=STORE / "jacob_ch31_v1", db=STORE / "reviews.sqlite3", reason_seed=None):
+    application = ReviewApplication(bundle, db, reason_seed)
     server = LocalReviewServer(("127.0.0.1", port), Handler)
     server.app = application
     return server
@@ -502,12 +598,13 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--bundle", type=Path, default=STORE / "jacob_ch31_v1")
     parser.add_argument("--db", type=Path, default=STORE / "reviews.sqlite3")
+    parser.add_argument("--reason-seed", type=Path, default=DEFAULT_SEED)
     args = parser.parse_args()
     import signal
     def stop_server(signum,frame):
         raise KeyboardInterrupt
     signal.signal(signal.SIGTERM,stop_server)
-    server = make_server(args.port, args.bundle, args.db)
+    server = make_server(args.port, args.bundle, args.db, args.reason_seed)
     print(f"Review backend ready: http://127.0.0.1:{server.server_port}; {len(server.app.cases)} saved real-data cases; model calls disabled", flush=True)
     try:
         server.serve_forever()

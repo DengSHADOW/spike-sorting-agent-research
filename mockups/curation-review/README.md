@@ -15,13 +15,15 @@ Use the project-specific Python 3.12 environment; do not modify `/workspace/.ven
 uv venv --python /usr/bin/python3.12 .venv-interface
 uv pip install --python .venv-interface/bin/python -r mockups/curation-review/backend/requirements.txt
 .venv-interface/bin/python -B mockups/curation-review/backend/import_jacob.py
+.venv-interface/bin/python -B mockups/curation-review/backend/jacob_reasons.py
 .venv-interface/bin/python -B mockups/curation-review/backend/server.py --port 8765
 ```
 
 The importer is a one-time offline operation. Its default output must not already exist; use a **new**
 `--output` child of `output/curation_review_local` for a fresh import and supply it to `server.py --bundle`.
-Do not rerun against or delete the existing bundle to restart the website. The server itself needs only
-the Python standard library. It binds to `127.0.0.1`; forward port 8765 in Remote SSH/VS Code, then visit
+Do not rerun against or delete the existing bundle to restart the website. The HTTP/SQLite layer uses the
+standard library; input-based reviewer analysis also uses the dependencies above. It binds to `127.0.0.1`;
+forward port 8765 in Remote SSH/VS Code, then visit
 `http://localhost:8765`. The CLI importer above is optional when using the browser import manager;
 the server can start with an empty catalog. Existing CH31 data is automatically registered when present.
 The top selector remembers the selected dataset/view; `?source=demo` opens the demo.
@@ -43,8 +45,9 @@ object/count alignment and all image hashes. It does not access expert terminal 
 replay curation actions, or issue new model requests. Reserved/quarantined datasets are rejected before opening.
 The historical request hash is preserved as **recorded**, with an explicit unverified-payload status.
 
-Cluster detail shows the original Phase 1 four-PNG / Phase 2 three-PNG evidence, including actual ISI
-histograms and amplitude distributions. Overview, Gallery, comparison-cluster detail and amplitude-over-time
+Cluster detail shows one original waveform PNG. The other original Phase 1 four-PNG / Phase 2 three-PNG
+inputs, including ISI histograms and amplitude distributions, remain in their corresponding tabs.
+Overview, Gallery, comparison-cluster detail and amplitude-over-time
 are additional reviewer evidence computed from the exact checkpoint membership and MAT spike rows.
 Means use all members; extra traces use up to 24 chronologically spaced global row IDs, and amplitude-time
 uses up to 500. These extra views are distinct from the frozen model's max-500 SHA256 sample. Missing spatial
@@ -138,7 +141,95 @@ Backend regressions (temporary fixture databases; no model/network calls outside
 ```
 
 Remaining research integration: live model execution, executable expert operations, verified Jacob expert-annotation
-library ingestion, additional dataset schemas outside the four approved channels, and feedback-driven skill learning.
+trajectory/terminal alignment beyond the documented sources, additional dataset schemas outside the four approved
+channels, public account-based hosting, and feedback-driven skill learning.
+
+### Evidence navigation and chart explanations
+
+Cluster detail contains one waveform chart in real saved runs, manual MAT review and the synthetic demo.
+ISI/Timing, amplitude-over-time and tree evidence live in their own tabs. Saved Phase 1 amplitude histograms
+have an Amplitude distribution tab for the source cluster; unavailable images do not get an invented replacement.
+The Viewing cluster selector opens another cluster's detail without changing the fixed review object. In Phase 2,
+this selects the source or target saved waveform individually; the saved merged ISI always belongs to the original
+AI pair, even after a reviewer proposes another target.
+
+Chart notes explain axes, counts, sampling and line/dot/bar meanings. Saved raw-waveform PNGs have sampled
+blue traces and a dashed zero line, with no mean overlay. New reviewer waveform views use a solid all-member
+mean and up to 24 faint chronological traces. All-waveform curves have cluster-ID tooltips and a shared scale;
+the Highlight curve selector and legend hover/focus isolate a curve because palette colors can repeat.
+Gallery thumbnails also share time/amplitude scales within the checkpoint. Chart keys appear above the
+waveform so they remain visible before scrolling through it. Original PNGs and hashes are unchanged.
+Tab exposure, including Amplitude distribution, is retained in saved feedback.
+
+### Candidate-pair analysis and quality metrics
+
+Compare pair fixes the source to the case's review object and allows any different active cluster in the
+same checkpoint as the candidate target. While proposing MERGE, its selector and the review-panel target
+stay synchronized. Both means and ±1 population SD bands use common time/amplitude axes. Source is solid,
+target dashed; colors remain tied to cluster IDs. No amplitude normalization or time shifting is applied.
+
+The API independently verifies the approved MAT/input identity and historical NPZ file/state hashes, then
+uses exact current member rows. Candidate ISI is recomputed from the sorted concatenation of both spike-time
+arrays, without changing assignments. Histograms show 0–50 ms, but the violation denominator includes **all**
+N−1 adjacent intervals. The numerator is strictly `< 2 ms`. The original saved-AI-pair histogram stays in ISI;
+the candidate calculation is clearly separate. Actually displayed candidate pairs are retained in feedback.
+
+Quality metrics reports population ISI count/rate, mean and SD of per-spike peak-to-trough amplitude, amplitude
+CV (`std(ddof=0)/mean`), and mean-amplitude change between the first/last 20% of chronological spikes. The
+drift windows are spike-count windows, not equal-duration time windows. Pair similarity is Pearson correlation
+of all-member mean waveforms at recorded sample indices. Undefined denominators/constant means return null,
+not zero. These are descriptive measurements with no automatic good/noise/merge threshold. Background-noise
+SNR and spatial quality remain unavailable. Calculations do not read expert fields or invoke the controller.
+The service holds at most one raw input dataset and 128 result objects; it never overwrites historical evidence.
+
+New routes: `GET /api/analysis/<case-id>?cluster=<unit-id>` and `?target=<unit-id>` (target pairs use the fixed
+case source). Both reject self/cross-state/out-of-scope objects before input access. Errors expose Retry in the UI.
+
+### Confidence and missing evidence
+
+Reviewers can optionally specify high/medium/low confidence and sufficient/insufficient evidence. Insufficient
+evidence requires categories or an explanation: waveform, timing, amplitude, spatial, split tree, recording
+context or other. Defer opens this request and remains an unresolved review status with `expert_action: null`.
+Structured missing evidence can explain a defer without inventing a correction reason. A disagreement with an
+available action remains a separate judgment. Confidence is self-reported, not a calibrated probability.
+
+Additive v3 fields are `expert_confidence`, `evidence_sufficiency`, `missing_evidence`, `missing_evidence_note`,
+and `pair_comparisons`. They survive save/reload/history/export/backup restore. Older records default to null /
+unspecified / empty lists and remain valid. Server reconstruction validates enums and active pair membership.
+
+### Verified Jacob default reasons and continuing additions
+
+The separate `jacob_reasons.py` reference importer reads only selected worksheets of the original
+`Jacob Bedke-Annotated_spike_sorting_data_w_chronux/action_sheet.xlsx`, pinned to SHA256
+`b182b90d8a245b6e83a6ca8a9db57a59ef81cdd7442ee8d3045151d2bb501de7`. CH3/CH31/CH30 contribute 97/54/90
+original rows: 241 references, 156 unique reasons after case/whitespace normalization. Spreadsheet quote wrappers
+are stripped using the existing audited parsing convention; original unmodified cell text is retained in references.
+CH20's old worksheet is excluded because its trajectory has a known invalid step and the canonical MAT log has
+no corresponding text reasons. CH30 still has separate action/terminal provenance. No action replay is performed.
+
+The seed is created once at `output/curation_review_local/jacob_reason_seed_v1.json`, ignored by Git alongside
+the original annotations. The server's `--reason-seed` default imports it idempotently on startup. A missing
+seed is shown explicitly in Data & inputs; it is never replaced by generated text. For a fresh machine, copy
+the private seed or run the source importer after providing the verified workbook. Do not commit the workbook,
+seed, SQLite database, or exported expert reason text to GitHub.
+
+Each seeded reason keeps the worksheet/full dataset ID, row, original text, raw action and source-file hash.
+This is **human-reference vocabulary**, not a matched answer for the current model checkpoint and not model
+input. Prefix suggestions identify Jacob-original vs reviewer/imported reasons. Data & inputs shows seed status
+and a shared-library browser with prefix/source filters and original reference details. Newly saved reasons are
+deduplicated, prefix searchable and immediately shared between reviewers. Usage counts and existing entries
+survive startup/import; new user text is never relabeled as Jacob. Canonical feedback records the selected
+reason's known sources. Backup/file import does not trust a client's claim of Jacob attribution.
+
+New routes: `GET /api/reasons/status` and `/api/reasons?prefix=…&limit=…` (1–5000). Reason JSON exports retain
+source metadata. Keep the private seed with the persistent review data when moving Pods or hosting.
+
+Offline measurement/source/persistence checks:
+
+```sh
+.venv-interface/bin/python -B -m unittest discover -s tests -p 'test_curation_review_*.py' -v
+node --test tests/test_curation_review_interface.cjs
+```
 
 ## Synthetic demo
 
@@ -166,7 +257,7 @@ These transforms change only the view and never alter data or review drafts.
 4. For a KEEP case, either Agree without a comment, add optional positive feedback, or Disagree while
    keeping KEEP and marking Rationale or Evidence interpretation. A disagreement always needs a reason or note.
 5. Enter a new correction reason. It becomes a searchable option on subsequent reviews in this browser.
-   The library starts empty: no options are claimed to come from Jacob's annotations.
+   A frontend-only demo starts empty; with the local backend it can also browse the separately sourced shared library.
 6. Open Cluster 031. SPLIT and agreement with the impossible scripted suggestion are unavailable.
 7. Reload the page, review feedback history, undo a decision, and export the local JSON.
 8. Open Revisions to discuss how feedback could lead to a validated workflow change. This view is a
@@ -205,8 +296,8 @@ node --test tests/test_curation_review_interface.cjs
 ```
 
 The synthetic demo remains separate from real saved-run ingestion, MAT processing and server-side reviews.
-Jacob-derived annotation options, live model integration, executing expert operations and skill learning
-remain separate integration work.
+Jacob defaults are supplied by the separate expert-reference importer. Live model integration, executing
+expert operations, public account-based hosting and skill learning remain separate integration work.
 
 Questions for the meeting:
 

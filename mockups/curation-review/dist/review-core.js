@@ -15,6 +15,7 @@
   const matchReasons = (library, prefix) => library.filter(r => reasonKey(r.text).startsWith(reasonKey(prefix)));
   const unit = (c, id) => c.units.find(u => u.id === id);
   const candidates = c => c.units.filter(u => u.id !== c.source);
+  const MISSING_EVIDENCE=['waveform','timing','amplitude','spatial','split_tree','recording_context','other'];
   function allowed(c) {
     return ['KEEP', ...(unit(c, c.source).split ? ['SPLIT'] : []), 'DISCARD',
       ...(candidates(c).length ? ['MERGE'] : []), ...(c.pair ? ['NOT_MERGE'] : []), 'DEFER'];
@@ -28,6 +29,14 @@
   }
   function validate(c, draft) {
     const manual=c.review_mode==='manual';
+    const sufficiency=draft.sufficiency??'unspecified',missing=draft.missing??[],missingNote=draft.missing_note??'';
+    if(draft.confidence!=null&&!['high','medium','low'].includes(draft.confidence))return 'Choose a valid confidence level.';
+    if(!['unspecified','sufficient','insufficient'].includes(sufficiency))return 'Choose a valid evidence sufficiency.';
+    if(!Array.isArray(missing)||missing.some(item=>!MISSING_EVIDENCE.includes(item)))return 'Choose valid missing evidence categories.';
+    if(typeof missingNote!=='string'||missingNote.length>2000)return 'Missing evidence note is invalid or too long.';
+    if(sufficiency!=='insufficient'&&(missing.length||missingNote.trim()))return 'Mark evidence as insufficient when requesting additional evidence.';
+    if(sufficiency==='insufficient'&&!missing.length&&!missingNote.trim()&&!String(draft.note||'').trim())return 'Choose missing evidence or explain what is needed.';
+    if(missing.includes('other')&&!missingNote.trim()&&!String(draft.note||'').trim())return 'Explain the other missing evidence.';
     if (manual?draft.agree!==null:typeof draft.agree !== 'boolean') return manual?'Manual review has no AI agreement.':'Choose Agree or Disagree first.';
     if (!Array.isArray(draft.disagreement_types) || draft.disagreement_types.some(t => !['action', 'target', 'rationale', 'evidence'].includes(t))) {
       return 'Invalid disagreement categories.';
@@ -40,7 +49,7 @@
     if (draft.agree && (draft.action !== c.ai ||
         (c.ai === 'MERGE' && draft.target !== c.pair[1]) ||
         (draft.disagreement_types || []).length)) return 'Agree must preserve the AI action, target, and rationale.';
-    if (((!draft.agree&&!manual)||(manual&&draft.action!=='KEEP')) && !normalizeReason(draft.reason) && !String(draft.note || '').trim()) {
+    if (((!draft.agree&&!manual)||(manual&&draft.action!=='KEEP')) && !normalizeReason(draft.reason) && !String(draft.note || '').trim() && !(draft.action==='DEFER'&&sufficiency==='insufficient'&&(missing.length||missingNote.trim()))) {
       return 'Add a reason or note for your disagreement.';
     }
     if (!manual && !draft.agree && !differences(c, draft).length) {
@@ -58,6 +67,8 @@
     const visible = [...new Set(context.visible_cluster_ids || [c.source])].filter(id => unit(c, id));
     const modelIds = c.review_mode==='manual'?[]:c.pair || [c.source];
     const tabs = [...new Set(context.viewed_tabs || ['detail'])];
+    const pairs=context.pair_comparisons||[];
+    if(!Array.isArray(pairs)||pairs.length>c.units.length||pairs.some(pair=>!Array.isArray(pair)||pair.length!==2||pair[0]!==c.source||pair[0]===pair[1]||pair.some(id=>!unit(c,id))))throw new Error('Invalid compared cluster pair.');
     return {
       schema: c.synthetic===false?'spikeagent-human-review-v3':SCHEMA, synthetic: c.synthetic!==false, review_mode: c.review_mode==='manual'?'manual':c.synthetic===false?'historical_model_review':'ai_assisted_review',
       case_id: c.id, dataset_id: c.dataset_id, recording_id: c.dataset_id,
@@ -77,6 +88,8 @@
       expert_reason: draft.agree ? '' : normalizeReason(draft.reason),
       expert_note: draft.agree ? '' : String(draft.note || '').trim(),
       expert_positive_comment: draft.agree||c.review_mode==='manual' ? String(draft.positive || '').trim() : '',
+      expert_confidence:draft.confidence??null,evidence_sufficiency:draft.sufficiency??'unspecified',
+      missing_evidence:[...new Set(draft.missing||[])],missing_evidence_note:String(draft.missing_note||'').trim(),
       review_status: draft.action === 'DEFER' ? 'deferred' : 'reviewed',
       action: draft.action, execution_status: 'not_executed',
       phase_contract_compatible: PHASE_ACTIONS[c.phase_id].includes(draft.action),
@@ -87,7 +100,8 @@
       viewed_cluster_ids: viewed.map(id => unit(c, id).cluster_id),
       model_visible_cluster_set: modelIds.map(id => unit(c, id).cluster_id),
       viewed_tabs: tabs, rationale_viewed: !!context.rationale_viewed,
-      additional_evidence_viewed: tabs.some(t => ['overview', 'gallery', 'stability'].includes(t)) || viewed.some(id => !modelIds.includes(id)),
+      pair_comparisons:pairs.map(pair=>pair.map(id=>unit(c,id).cluster_id)),
+      additional_evidence_viewed: tabs.some(t => ['overview', 'gallery', 'stability', 'pair', 'quality'].includes(t)) || viewed.some(id => !modelIds.includes(id)),
       timestamp: context.timestamp || new Date().toISOString(), annotator: String(context.annotator || '').trim() || null
     };
   }
@@ -108,8 +122,9 @@
     const expertPair = target ? [unit(c, c.source).cluster_id, unit(c, target).cluster_id] : null;
     if (JSON.stringify(r.expert_pair) !== JSON.stringify(expertPair)) return false;
     return !validate(c, {agree: r.expert_agree, action: r.action, target,
-      reason: r.expert_reason, note: r.expert_note, disagreement_types: r.disagreement_types});
+      reason: r.expert_reason, note: r.expert_note, disagreement_types: r.disagreement_types,
+      confidence:r.expert_confidence,sufficiency:r.evidence_sufficiency,missing:r.missing_evidence,missing_note:r.missing_evidence_note});
   }
-  return {SCHEMA, PHASE_ACTIONS, normalizeReason, reasonKey, matchReasons, candidates, allowed, differences,
+  return {SCHEMA, PHASE_ACTIONS, MISSING_EVIDENCE, normalizeReason, reasonKey, matchReasons, candidates, allowed, differences,
     validate, buildReview, rememberReason, validStoredReview};
 });

@@ -1,4 +1,4 @@
-# Only the offline MAT importer needs these. The HTTP/SQLite backend uses stdlib.
+# Offline MAT imports and read-only reviewer analysis; HTTP/SQLite uses stdlib.
 numpy==2.2.6
 scipy==1.15.3
 h5py==3.14.0

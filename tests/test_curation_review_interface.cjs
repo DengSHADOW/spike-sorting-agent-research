@@ -125,3 +125,20 @@ test('malformed stored feedback is rejected before it can corrupt history or exp
     {...r, disagreement_types: {}}, {...r, timestamp: 'invalid-date'}, {...r, expert_action: null}
   ]) assert.equal(Core.validStoredReview(pair, altered), false);
 });
+
+test('confidence, missing evidence and compared pairs round-trip without converting defer into disagreement certainty',()=>{
+  const d=draft({agree:false,action:'DEFER',confidence:'low',sufficiency:'insufficient',missing:['timing'],missing_note:'Need pair evidence'});
+  assert.equal(Core.validate(keep,d),null);
+  const r=Core.buildReview(keep,d,{viewed_tabs:['pair','quality'],pair_comparisons:[[keep.source,keep.units[1].id]]});
+  assert.equal(r.expert_confidence,'low');assert.equal(r.evidence_sufficiency,'insufficient');
+  assert.deepEqual(r.missing_evidence,['timing']);assert.equal(r.expert_action,null);
+  assert.equal(r.additional_evidence_viewed,true);
+  assert.equal(Core.validStoredReview(keep,JSON.parse(JSON.stringify(r))),true);
+});
+
+test('invalid confidence and inconsistent missing-evidence requests cannot be saved',()=>{
+  assert.match(Core.validate(keep,draft({confidence:'certain'})),/confidence/);
+  assert.match(Core.validate(keep,draft({sufficiency:'sufficient',missing:['spatial']})),/insufficient/);
+  assert.match(Core.validate(keep,draft({sufficiency:'insufficient',missing:['other']})),/other missing/);
+  assert.throws(()=>Core.buildReview(keep,draft(),{pair_comparisons:[[keep.source,keep.source]]}),/compared cluster/);
+});

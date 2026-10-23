@@ -63,6 +63,54 @@ class PersistenceTests(unittest.TestCase):
         self.assertEqual(restored["review"]["execution_status"], "not_executed")
         self.assertFalse(self.store.reviews("reviewer-b"))
 
+    def test_amplitude_tab_exposure_survives_save_and_export(self):
+        data=body()
+        data["context"]["viewed_tabs"]=["detail","amplitude","timing"]
+        self.store.write("reviewer-a",self.case,data)
+        review=self.store.export("reviewer-a")["reviews"][0]
+        self.assertEqual(review["viewed_tabs"],["detail","amplitude","timing"])
+        self.assertFalse(review["additional_evidence_viewed"])
+        self.assertEqual(review["image_sha256"],self.case["image_sha256"])
+
+    def test_confidence_missing_evidence_and_pair_views_survive_backup_restore(self):
+        data=body()
+        data["draft"].update(action="DEFER",reason="",confidence="low",sufficiency="insufficient",missing=["timing","spatial"],missing_note="Need the candidate pair timing")
+        data["context"].update(viewed_tabs=["pair","quality"],pair_comparisons=[["U-001","U-002"]])
+        saved=self.store.write("reviewer-a",self.case,data)["review"]
+        self.assertEqual(saved["expert_confidence"],"low")
+        self.assertEqual(saved["evidence_sufficiency"],"insufficient")
+        self.assertEqual(saved["missing_evidence"],["timing","spatial"])
+        self.assertEqual(saved["pair_comparisons"],[[1,2]])
+        self.assertEqual(saved["review_status"],"deferred")
+        self.assertIsNone(saved["expert_action"])
+        self.store.import_backup("reviewer-b",self.store.export("reviewer-a"),{self.case["id"]:self.case},preview=False)
+        restored=self.store.reviews("reviewer-b")[self.case["id"]]["review"]
+        for key in ("expert_confidence","evidence_sufficiency","missing_evidence","missing_evidence_note","pair_comparisons"):
+            self.assertEqual(restored[key],saved[key])
+
+    def test_new_judgment_fields_reject_invalid_or_inconsistent_values(self):
+        for fields in (dict(confidence="certain"),dict(confidence=[]),dict(sufficiency="maybe"),dict(missing=["invented"]),
+                       dict(sufficiency="sufficient",missing=["waveform"]),dict(sufficiency="insufficient",missing=["other"],note="",reason="reason")):
+            data=body();data["draft"].update(fields)
+            with self.assertRaises(ValueError):self.store.write("reviewer-a",self.case,data)
+        data=body();data["context"]["pair_comparisons"]=[["U-002","U-001"]]
+        with self.assertRaises(ValueError):self.store.write("reviewer-a",self.case,data)
+
+    def test_default_seed_is_idempotent_and_new_reasons_keep_distinct_sources(self):
+        seed=dict(schema=server.REASON_SEED_VERSION,reasons=[dict(text="Waveform mismatch",sources=[dict(sheet="fixture",row=2)])],n_source_rows=1)
+        with patch.object(server,"load_seed",return_value=seed):
+            self.assertEqual(self.store.seed_reasons("fixture")["added"],1)
+            self.assertEqual(self.store.seed_reasons("fixture")["added"],0)
+        self.store.import_reasons(["waveform mismatch","Timing differs"],"user-imported-reason-library")
+        default=self.store.reasons("waveform")[0]
+        self.assertEqual({s["kind"] for s in default["sources"]},{"jacob","user_imported"})
+        data=body();data["draft"]["reason"]="Waveform mismatch"
+        saved=self.store.write("private-reviewer-key",self.case,data)["review"]
+        self.assertTrue(any(s["kind"]=="jacob" for s in saved["reason_sources"]))
+        self.assertNotIn("private-reviewer-key",json.dumps(self.store.reasons()))
+        self.assertEqual(self.store.reasons("timing")[0]["sources"][0]["kind"],"user_imported")
+        self.assertEqual(self.store.reason_status()["total"],2)
+
     def test_prefix_matching_is_not_substring_or_sql_wildcard(self):
         self.store.import_reasons(["Waveform contamination", "Mixed waveform populations", "waveform contamination", "100% artifacts", "_prefix"])
         self.assertEqual(len(self.store.reasons("WaVe")), 1)

@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#f6f7f9">
   <meta name="description" content="An interactive expert review mockup for spike curation. Inspect evidence, correct proposed actions, and review feedback. All data is illustrative.">
   <title>SpikeAgent · Expert review</title>
-  <link rel="stylesheet" href="style.css?v=8">
+  <link rel="stylesheet" href="style.css?v=10">
 </head>
 <body>
   <div class="shell">
@@ -48,8 +48,9 @@
           <main class="evidence-panel" tabindex="0" aria-label="Evidence, scrollable">
             <div class="case-heading"><div><div class="eyebrow" id="case-channel"></div><h2 id="case-title"></h2><div class="case-badges" id="case-badges"></div></div></div>
             <div class="metrics" id="metrics"></div>
-            <div class="evidence-tabs" role="tablist" aria-label="Evidence views"><button class="active" role="tab" aria-selected="true" data-tab="detail">Cluster detail</button><button role="tab" aria-selected="false" data-tab="overview">All waveforms</button><button role="tab" aria-selected="false" data-tab="gallery">Gallery</button><button role="tab" aria-selected="false" data-tab="timing">Timing</button><button role="tab" aria-selected="false" data-tab="stability">Drift & location</button><button role="tab" aria-selected="false" data-tab="tree">Split tree</button></div>
-            <div id="evidence-content"></div>
+            <div class="evidence-tabs" role="tablist" aria-label="Evidence views"><button class="active" role="tab" aria-selected="true" data-tab="detail">Cluster detail</button><button role="tab" aria-selected="false" data-tab="pair" hidden>Compare pair</button><button role="tab" aria-selected="false" data-tab="quality" hidden>Quality metrics</button><button role="tab" aria-selected="false" data-tab="overview">All waveforms</button><button role="tab" aria-selected="false" data-tab="gallery">Gallery</button><button role="tab" aria-selected="false" data-tab="timing">Timing</button><button role="tab" aria-selected="false" data-tab="amplitude" hidden>Amplitude distribution</button><button role="tab" aria-selected="false" data-tab="stability">Drift & location</button><button role="tab" aria-selected="false" data-tab="tree">Split tree</button></div>
+            <div id="evidence-context" class="evidence-context"></div>
+            <div id="evidence-content" role="tabpanel"></div>
             <div class="evidence-footer"><span><span class="teal-dot"></span>Model-visible evidence</span><span class="mono">Synthetic preview · not recorded spikes</span></div>
           </main>
 
@@ -67,6 +68,7 @@
               <div class="reason-section"><label for="reason-select">Correction reason <span>reason or note required</span></label><div class="reason-combobox"><input id="reason-select" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="reason-suggestions" autocomplete="off" maxlength="2000" placeholder="Type the first letters of a saved reason…"><div id="reason-suggestions" role="listbox" aria-label="Reasons starting with your input" hidden></div></div><datalist id="reason-options"></datalist><label for="review-note" class="sr-only">Correction note</label><textarea id="review-note" rows="3" maxlength="10000" placeholder="What should change, and why?"></textarea><p class="field-help" id="reason-help">Reasons are remembered after saving. Type the first letters to see matching reasons.</p></div>
             </div>
             <div id="positive-panel" class="reason-section" hidden><label for="positive-comment">Positive feedback <span>optional</span></label><textarea id="positive-comment" rows="3" maxlength="10000" placeholder="Anything particularly good about this cluster? You can leave this empty."></textarea></div>
+            <fieldset class="certainty-fields"><legend>Confidence & evidence</legend><label for="judgment-confidence">Confidence in your judgment<select id="judgment-confidence"><option value="">Not specified</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select></label><label for="evidence-sufficiency">Is the evidence sufficient?<select id="evidence-sufficiency"><option value="unspecified">Not specified</option><option value="sufficient">Sufficient for this judgment</option><option value="insufficient">Insufficient — more evidence needed</option></select></label><div id="missing-evidence-fields" hidden><p>What is missing?</p><div class="missing-evidence-options"><label><input type="checkbox" value="waveform"> Waveform detail</label><label><input type="checkbox" value="timing"> Timing / candidate-pair ISI</label><label><input type="checkbox" value="amplitude"> Amplitude stability</label><label><input type="checkbox" value="spatial"> Spatial information</label><label><input type="checkbox" value="split_tree"> Split tree</label><label><input type="checkbox" value="recording_context"> Recording context</label><label><input type="checkbox" value="other"> Other</label></div><label for="missing-evidence-note">What would resolve it?<textarea id="missing-evidence-note" rows="2" maxlength="2000" placeholder="Describe the evidence you need…"></textarea></label></div><p class="field-help">Confidence is self-reported. Defer keeps the case unresolved; disagreement records a correction.</p></fieldset>
             <div class="decision-preview" id="decision-preview"></div>
             <div id="form-error" class="form-error" role="alert"></div>
             <button class="button primary full" id="save-button" disabled>Save review & next <span aria-hidden="true">→</span></button>
@@ -104,14 +106,15 @@
         <progress id="upload-progress" max="100" value="0" hidden></progress><p id="import-message" class="input-message" role="status"></p>
       </section>
       <section class="input-section"><h3>Available datasets</h3><div id="dataset-list"></div><h3>Import jobs</h3><div id="import-jobs"></div></section>
-      <section class="input-section"><h3>Reason library</h3><label for="reason-import-file">JSON, CSV or UTF-8 text<input id="reason-import-file" type="file" accept=".json,.csv,.txt"></label><p class="input-help">CSV needs a text or reason column. One reason per line in text files. Existing reasons are retained; duplicates are skipped.</p><div class="input-actions"><button id="import-reasons-file" class="button">Import reasons</button><button id="export-reasons-file" class="button">Export reasons</button></div><p id="reason-import-message" class="input-message" role="status"></p></section>
+      <section class="input-section"><h3>Reason library</h3><p id="reason-library-status" class="input-help"></p><p class="input-help">Jacob defaults are original expert vocabulary, not matched answers for the current case. New reviewer reasons are saved separately with their source.</p><label for="reason-import-file">JSON, CSV or UTF-8 text<input id="reason-import-file" type="file" accept=".json,.csv,.txt"></label><p class="input-help">CSV needs a text or reason column. One reason per line in text files. Existing reasons are retained; duplicates are skipped.</p><div class="input-actions"><button id="browse-reasons" class="button">Browse shared library</button><button id="import-reasons-file" class="button">Import reasons</button><button id="export-reasons-file" class="button">Export reasons</button></div><div id="reason-library-browser" hidden><label for="reason-library-prefix">Reason starts with<input id="reason-library-prefix" placeholder="Type the first letters…"></label><label for="reason-library-source">Source<select id="reason-library-source"><option value="all">All reasons</option><option value="jacob">Jacob defaults</option><option value="user">Reviewer / imported reasons</option></select></label><div id="reason-library-list"></div></div><p id="reason-import-message" class="input-message" role="status"></p></section>
       <section class="input-section"><h3>Restore feedback</h3><label for="feedback-import-file">Real-data feedback JSON<input id="feedback-import-file" type="file" accept=".json"></label><p class="input-help">Check a v3 export, then restore missing reviews to the current reviewer. Existing reviews and their history are preserved. Import the referenced dataset views first.</p><div class="input-actions"><button id="check-feedback-file" class="button">Check backup</button><button id="restore-feedback-file" class="button primary" disabled>Restore missing reviews</button></div><p id="feedback-import-message" class="input-message" role="status"></p></section>
       <section class="input-section input-wide"><h3>Reviewer identity</h3><p class="input-help">The name in the page header is saved on the server. To continue your review history on another computer, copy this reviewer key and use it there. This local SSH workspace has no account login.</p><div class="input-row"><label for="reviewer-key">Reviewer key<input id="reviewer-key" maxlength="100" autocomplete="off" spellcheck="false"></label><div class="input-actions"><button id="copy-reviewer-key" class="button">Copy key</button><button id="use-reviewer-key" class="button">Use reviewer key</button></div></div><p id="reviewer-profile-message" class="input-message" role="status"></p></section>
     </div>
   </dialog>
   <div id="toast" class="toast" role="status"></div>
-  <script src="review-core.js?v=4"></script>
-  <script src="app.js?v=8"></script>
-  <script src="inputs.js?v=1"></script>
+  <script src="review-core.js?v=5"></script>
+  <script src="analysis.js?v=1"></script>
+  <script src="app.js?v=10"></script>
+  <script src="inputs.js?v=2"></script>
 </body>
 </html>
