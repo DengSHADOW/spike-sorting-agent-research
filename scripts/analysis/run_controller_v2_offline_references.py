@@ -43,7 +43,7 @@ def frozen_files():
             (Path(__file__).resolve(), ROOT / "src/pipeline/curation_controller_v2.py")}}
 
 
-def run_dataset(row, out, k):
+def run_dataset(row, out, k, controller="interleaved"):
     data = existing.load_data(row)
     out.mkdir(parents=True, exist_ok=False)
     rows = []
@@ -55,9 +55,10 @@ def run_dataset(row, out, k):
             pred, calls, operations, kinds, actions, status = data["hierarchy_assigns"].copy(), 0, 0, {}, {}, "completed"
         else:
             policy = ref.Policy(name, seed=seed, reference=data["curation_assigns"] if name == "oracle_purity_v1" else None)
-            c = v2.CurationControllerV2(ref.fresh(data), row["dataset_id"], folder, decider=PolicyDecider(policy),
-                                        sampling_rate=data["Fs"], k=k, manifest=dict(policy=name, seed=seed,
-                                        labels_visible=name == "oracle_purity_v1", api_calls=0))
+            cls = v2.RoundsController if controller == "rounds" else v2.CurationControllerV2
+            c = cls(ref.fresh(data), row["dataset_id"], folder, decider=PolicyDecider(policy),
+                    sampling_rate=data["Fs"], k=k, manifest=dict(policy=name, seed=seed,
+                    labels_visible=name == "oracle_purity_v1", api_calls=0))
             pred = c.run()
             if name == "always_keep" and not (pred == data["hierarchy_assigns"]).all():
                 raise AssertionError("KEEP changed input")
@@ -65,7 +66,8 @@ def run_dataset(row, out, k):
                          if e["event"] == "decision"]
             calls, operations, status = c.calls, c.operations, c.status
             kinds, actions = dict(Counter(e["kind"] for e in decisions)), dict(Counter(e["action"] for e in decisions))
-        result = dict(trial=label, policy=name, seed=seed, status=status, local_decisions=calls,
+        rounds = getattr(c, "round", None) if name != "no_curation" else 0
+        result = dict(trial=label, policy=name, seed=seed, status=status, local_decisions=calls, rounds=rounds,
                       operations=operations, by_kind=kinds, by_action=actions, seconds=monotonic() - started,
                       api_calls=0, scores=ref.score(pred, data) if status == "completed" else None)
         existing.write(folder / "score.json", result)
@@ -83,15 +85,16 @@ def v1_reference():
     return out
 
 
-def report(out, bundles, k):
+def report(out, bundles, k, controller="interleaved"):
     v1 = v1_reference()
     f1 = lambda t: t["scores"]["one_to_one"]["full_output"]["f1"]
-    lines = ["# Controller v2 offline references", "",
-             f"Controller v2 (interleaved single/pair judgements, no phases, k = {k}); frozen v1 reference policies "
+    what = "round-synchronous, final sweep on" if controller == "rounds" else "interleaved single/pair judgements"
+    lines = [f"# Controller v2 offline references ({controller})", "",
+             f"Controller v2 ({what}, no phases, k = {k}); frozen v1 reference policies "
              "and seeds 0–9; one-to-one IoU ≥ 0.5 full-output scoring. API calls 0. The oracle reads expert terminal "
              "labels: F1 = 1 means v2 still leaves a path to the expert terminal; it is not a model score.", "",
              "| Dataset | No curation | Always split v1 → v2 | Random mean v1 → v2 | Oracle v1 → v2 | Oracle units v2 | "
-             "Oracle decisions v1 → v2 |", "|---|---:|---:|---:|---:|---:|---:|"]
+             "Oracle decisions v1 → v2 | Oracle rounds |", "|---|---:|---:|---:|---:|---:|---:|---:|"]
     for dataset, b in bundles.items():
         t, old = {x["trial"]: x for x in b["trials"]}, v1[dataset]
         o = t["oracle_purity_v1"]["scores"]["one_to_one"]
@@ -99,7 +102,8 @@ def report(out, bundles, k):
                      f"{old_random(old):.4f} → {b['random_statistics']['f1']['mean']:.4f} | "
                      f"{f1(old['oracle_purity_v1']):.4f} → {f1(t['oracle_purity_v1']):.4f} | "
                      f"{o['n_matched_units']}/{o['n_expert_units']} | "
-                     f"{old['oracle_purity_v1']['local_decisions']} → {t['oracle_purity_v1']['local_decisions']} |")
+                     f"{old['oracle_purity_v1']['local_decisions']} → {t['oracle_purity_v1']['local_decisions']} | "
+                     f"{t['oracle_purity_v1'].get('rounds')} |")
     for dataset, b in bundles.items():
         lines += ["", f"## {dataset}", "", "| Trial | Status | P | R | F1 | Units | Clusters | Expert spikes discarded | "
                   "Decisions (single / pair) |", "|---|---|---:|---:|---:|---:|---:|---:|---:|"]
@@ -121,23 +125,23 @@ def old_random(trials):
     return sum(values) / len(values)
 
 
-def run(out, datasets=DATASETS, k=3):
+def run(out, datasets=DATASETS, k=3, controller="interleaved"):
     out = Path(out)
     with ref.offline_only():
         rows = ref.stage6.selected_rows(list(datasets))
         hashes = frozen_files()
         out.mkdir(parents=True, exist_ok=False)
         existing.write(out / "manifest.json", dict(version="controller-v2-offline-references-v1", datasets=rows,
-            k=k, controller=v2.VERSION, policies=ref.POLICIES, random_seeds=list(existing.SEEDS),
+            k=k, controller=v2.ROUNDS_VERSION if controller == "rounds" else v2.VERSION, policies=ref.POLICIES, random_seeds=list(existing.SEEDS),
             code_hashes=hashes, environment=ref.stage6.environment(), model=None, api_calls=0,
             visibility="Only the oracle and the scorer see MAT terminal labels"))
         bundles = {}
         for row in rows:
-            bundles[row["dataset_id"]] = run_dataset(row, out / "datasets" / row["dataset_id"], k)
+            bundles[row["dataset_id"]] = run_dataset(row, out / "datasets" / row["dataset_id"], k, controller)
         if hashes != frozen_files() or any(existing.sha(ROOT / r["mat_path"]) != r["mat_sha256"] for r in rows):
             raise ValueError("Frozen code or MAT changed during the run")
         existing.write(out / "summary.json", dict(status="completed", api_calls=0, datasets=bundles))
-        report(out, bundles, k)
+        report(out, bundles, k, controller)
     print(f"COMPLETE {out}", flush=True)
 
 
@@ -146,8 +150,9 @@ def main():
     p.add_argument("--output-root", required=True)
     p.add_argument("--datasets", nargs="+", default=list(DATASETS))
     p.add_argument("-k", type=int, default=3)
+    p.add_argument("--controller", choices=("interleaved", "rounds"), default="interleaved")
     args = p.parse_args()
-    run(ref.stage6.output_path(args.output_root), args.datasets, args.k)
+    run(ref.stage6.output_path(args.output_root), args.datasets, args.k, args.controller)
 
 
 if __name__ == "__main__":

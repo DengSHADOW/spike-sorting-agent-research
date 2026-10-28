@@ -81,15 +81,17 @@ class CurationControllerV2(CurationController):
         self.seen, self.kept, self.undo_split = set(), set(), {}
         self.means, self.started = {}, None
         self.input_hash = arrays_hash(manager.overcluster_assigns, manager.spike_times, manager.waveforms)
-        write_json(self.out / "manifest.json", dict(version=VERSION, dataset_id=dataset_id,
+        write_json(self.out / "manifest.json", dict(self.describe(), dataset_id=dataset_id,
             input_sha256=self.input_hash, sampling_rate=sampling_rate, k=k, order=order,
             max_decisions=max_decisions, max_seconds=max_seconds, phases=None, small_cluster_threshold=None,
             prevalidation=None, unresolved_rule=None, auto_discard_threshold=0,
             split_offered="only when the last hierarchical merge can be undone",
-            merge_candidates=f"top {k} already-kept clusters by mean-waveform correlation, any size; "
-                             "first MERGE executed, merged cluster judged again",
             decider=getattr(decider, "kind", type(decider).__name__), **(manifest or {})))
         self.checkpoint("initial")
+
+    def describe(self):
+        return dict(version=VERSION, merge_candidates=f"top {self.k} already-kept clusters by mean-waveform "
+                    "correlation, any size; first MERGE executed, merged cluster judged again")
 
     # ------------------------------------------------------------------ decisions
     def ask(self, kind, cid, target=None):
@@ -216,4 +218,219 @@ class CurationControllerV2(CurationController):
                 n_active_spikes=int(np.count_nonzero(self.manager.assigns)),
                 n_clusters=len(self.manager.get_active_clusters()), final_sha256=self.state_hash(),
                 terminal_evaluation_allowed=done))
+        return self.manager.assigns.copy()
+
+
+# ====================================================================== rounds (harness v2, §3.7.4)
+ROUNDS_VERSION = "controller-v2-rounds"
+
+
+class RoundsController(CurationControllerV2):
+    """Round-synchronous scheduling. Each round collects every independent question on the frozen
+    current state (single judgements of new clusters, pair judgements of newly kept clusters against
+    their top-k correlated kept clusters), asks them as one batch and only then executes the answers.
+    Parallelism (`parallel`) therefore changes timing, never the questions or the outcome.
+
+    Execution: singles first (DISCARD, SPLIT children judged next round, KEEP joins the kept set);
+    then pair answers in decreasing correlation, each cluster in at most one MERGE/DISCARD per round
+    (later conflicting answers are void and logged). A merged cluster is judged again next round; a
+    SPLIT that exactly restores the two merged clusters vetoes the merge and the pair is never asked
+    again. A pair already answered (identified by both clusters' member hashes) is not asked again.
+    Final sweep (default on): when nothing is left, each kept cluster is asked once against its best
+    correlated kept cluster not yet asked; resulting merges are judged as usual; no second sweep.
+    Limits: decisions, rounds, seconds, decider budgets -> 'stopped_limit'; the stopped state is
+    scored separately ('stopped_state'), never mixed with completed runs.
+    """
+
+    def __init__(self, manager, dataset_id, output_root, *, parallel=1, final_sweep=True, max_rounds=None, **kw):
+        if type(parallel) is not int or parallel < 1 or (max_rounds is not None and (type(max_rounds) is not int
+                                                                                    or max_rounds < 1)):
+            raise ValueError("Invalid parallel or max_rounds")
+        self.parallel, self.final_sweep, self.max_rounds = parallel, bool(final_sweep), max_rounds
+        self.round, self.asked_pairs, self.vetoed = 0, set(), set()
+        super().__init__(manager, dataset_id, output_root, **kw)
+
+    def describe(self):
+        return dict(version=ROUNDS_VERSION, scheduling="round-synchronous; answers executed after the whole round",
+                    parallel=self.parallel, final_sweep=self.final_sweep, max_rounds=self.max_rounds,
+                    merge_candidates=f"top {self.k} kept clusters by mean-waveform correlation, any size; "
+                                     "MERGEs executed in decreasing correlation, one per cluster per round")
+
+    # ------------------------------------------------------------------ questions
+    def pair_key(self, a, b):
+        return frozenset((self.members(a), self.members(b)))
+
+    def ranked(self, cid):
+        active, ranked = set(self.manager.get_active_clusters()), []
+        for other in self.kept:
+            if other == cid or other not in active:
+                continue
+            pair = (min(cid, other), max(cid, other))
+            if pair in self.undo_split and self.undo_split[pair] == self.members(cid, other):
+                continue
+            r = correlation(self.mean(cid), self.mean(other))
+            if r is not None:
+                ranked.append((-r, other))
+        return [(other, -r) for r, other in sorted(ranked)]
+
+    def pair_question(self, a, b, r, chosen):
+        key = self.pair_key(a, b)
+        if key in self.asked_pairs or key in self.vetoed or key in chosen:
+            return None
+        chosen.add(key)
+        source, target = sorted((a, b), key=lambda c: (self.size(c), c))
+        return dict(kind="pair", cid=source, target=target, correlation=r, key=key)
+
+    def by_size(self, cids):
+        return sorted(cids, key=lambda c: (-self.size(c), c))
+
+    def round_pairs(self, fresh):
+        chosen, out = set(), []
+        for cid in self.by_size(fresh):
+            for other, r in self.ranked(cid)[:self.k]:
+                q = self.pair_question(cid, other, r, chosen)
+                if q:
+                    out.append(q)
+        return out
+
+    def sweep_pairs(self):
+        chosen, out = set(), []
+        for cid in self.by_size(self.kept):
+            for other, r in self.ranked(cid):
+                q = self.pair_question(cid, other, r, chosen)
+                if q:
+                    out.append(q)
+                    break
+        return out
+
+    # ------------------------------------------------------------------ asking
+    def ask_round(self, questions):
+        if self.calls + len(questions) > self.max_decisions:
+            raise LimitStop("Decision limit reached")
+        if self.max_seconds is not None and monotonic() - self.started > self.max_seconds:
+            raise LimitStop("Time limit reached")
+        m, state, jobs = self.manager, self.state_hash(), []
+        for q in questions:
+            key = (q["kind"], self.members(q["cid"]), None if q.get("target") is None else self.members(q["target"]))
+            if key in self.seen:
+                raise ControllerStop("Repeated decision state: scheduler bug")
+            self.seen.add(key)
+            q["allowed"] = ["KEEP", "DISCARD"] + (["SPLIT"] if split_available(m, q["cid"]) else []) \
+                if q["kind"] == "single" else list(ACTIONS["pair"])
+            self.calls += 1
+            folder = self.out / f"step_{self.calls:05d}"
+            folder.mkdir()
+            write_json(folder / "question.json", dict(kind=q["kind"], cid=int(q["cid"]), target=q.get("target"),
+                       allowed=q["allowed"], round=self.round, state_sha256=state))
+            prepared = None
+            if hasattr(self.decider, "prepare"):  # rendering is serial; only the model calls run in parallel
+                prepared = self.decider.prepare(m, q["kind"], int(q["cid"]), q.get("target"), q["allowed"],
+                                                folder=folder, sampling_rate=self.fs)
+            jobs.append((q, folder, prepared))
+
+        def answer(job):
+            q, folder, prepared = job
+            if prepared is None:
+                return self.decider.decide(m, q["kind"], int(q["cid"]), q.get("target"), q["allowed"],
+                                           folder=folder, sampling_rate=self.fs)
+            return self.decider.answer(prepared, q["allowed"], folder=folder)
+
+        if self.parallel > 1 and len(jobs) > 1:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=self.parallel) as pool:
+                answers = list(pool.map(answer, jobs))
+        else:
+            answers = [answer(job) for job in jobs]
+        for (q, _, _), d in zip(jobs, answers):
+            if not isinstance(d, dict) or d.get("action") not in q["allowed"] or not isinstance(d.get("rationale"), str):
+                raise ControllerStop("Decider returned an action outside the offered set")
+            q["action"] = d["action"]
+            self.log("decision", kind=q["kind"], cid=int(q["cid"]), target=q.get("target"), allowed=q["allowed"],
+                     action=d["action"], rationale=d["rationale"], round=self.round,
+                     observations={k: v for k, v in d.items() if k not in ("action", "rationale")} or None)
+        return questions
+
+    # ------------------------------------------------------------------ execution
+    def execute_round(self, singles, pairs):
+        pending, fresh, active = [], [], lambda c: c in self.manager.get_active_clusters()
+        for q in singles:
+            cid, action, merged = q["cid"], q["action"], q.get("merged")
+            if action == "DISCARD":
+                self.execute("DISCARD", cid)
+            elif action == "SPLIT":
+                members = self.members(cid)
+                first, second = self.execute("SPLIT", cid)
+                self.undo_split[(min(first, second), max(first, second))] = members
+                if merged and {self.members(first), self.members(second)} == merged:
+                    self.kept.update((first, second))
+                    self.vetoed.add(frozenset(merged))
+                    self.log("merge_vetoed", source=second, target=first, round=self.round)
+                else:
+                    pending += [dict(cid=first), dict(cid=second)]
+            else:
+                self.kept.add(cid)
+                fresh.append(cid)
+        used = set()
+        for q in sorted(pairs, key=lambda q: -q["correlation"]):
+            self.asked_pairs.add(q["key"])
+            source, target, action = q["cid"], q["target"], q["action"]
+            if action == "NOT_MERGE":
+                continue
+            if source in used or target in used or not (active(source) and active(target)):
+                self.log("pair_void", source=source, target=target, action=action, round=self.round,
+                         reason="a cluster of this pair already changed in this round")
+                continue
+            if action == "MERGE":
+                merged = {self.members(source), self.members(target)}
+                self.execute("MERGE", source, target)
+                self.kept.discard(source)
+                self.kept.discard(target)
+                used.update((source, target))
+                pending.append(dict(cid=target, merged=merged))
+            else:  # DISCARD the source
+                self.execute("DISCARD", source)
+                self.kept.discard(source)
+                used.add(source)
+        return pending, fresh
+
+    def run(self):
+        self.status, self.started = "running", monotonic()
+        swept = False
+        try:
+            pending = [dict(cid=c) for c in self.initial_queue()]
+            fresh = []
+            while True:
+                singles = [dict(q, kind="single") for q in pending if q["cid"] in self.manager.get_active_clusters()]
+                order = {c: i for i, c in enumerate(self.by_size([q["cid"] for q in singles]))}
+                singles.sort(key=lambda q: order[q["cid"]])
+                pairs = self.round_pairs(fresh)
+                if not singles and not pairs:
+                    if not self.final_sweep or swept:
+                        break
+                    swept, pairs = True, self.sweep_pairs()
+                    self.log("final_sweep", pairs=len(pairs))
+                    if not pairs:
+                        break
+                if self.max_rounds is not None and self.round >= self.max_rounds:
+                    raise LimitStop("Round limit reached")
+                self.round += 1
+                self.log("round", round=self.round, singles=len(singles), pairs=len(pairs),
+                         state_sha256=self.state_hash())
+                self.ask_round(singles + pairs)
+                pending, fresh = self.execute_round(singles, pairs)
+            self.status = "completed"
+        except LimitStop as exc:
+            self.status = "stopped_limit"
+            self.log("limit_stop", reason=str(exc), round=self.round, state_sha256=self.state_hash())
+        except BaseException:
+            self.status = "stopped"
+            raise
+        finally:
+            done = self.status == "completed"
+            self.checkpoint("terminal" if done else "stopped")
+            write_json(self.out / "summary.json", dict(status=self.status, decisions=self.calls, rounds=self.round,
+                operations=self.operations, seconds=monotonic() - self.started, final_sweep_done=swept,
+                n_active_spikes=int(np.count_nonzero(self.manager.assigns)),
+                n_clusters=len(self.manager.get_active_clusters()), final_sha256=self.state_hash(),
+                terminal_evaluation_allowed=done, stopped_state_evaluation=self.status == "stopped_limit"))
         return self.manager.assigns.copy()

@@ -76,10 +76,33 @@ Start one model at a time in the foreground:
 Append `--dry-run` to print a command without starting anything. The launcher
 refuses to start without a visible NVIDIA runtime, uses the verified local
 snapshot with Hugging Face offline mode, and binds to `127.0.0.1:8000`.
-Defaults: BF16, context length 16,384 tokens, one concurrent sequence, four
-images per request, and the model-specific reasoning parser. This context limit
+Defaults (changed 2026-10-28 for harness v2, 项目总文档 §3.7.5): BF16, context
+length 24,576 tokens, up to four concurrent sequences, six images per request,
+and the model-specific reasoning parser. The number of sequences that actually
+fit in GPU memory must be measured in the first smoke test. This context limit
 includes input images/text plus generated reasoning and final output. There is
 no automatic service startup, model switch, API fallback or experiment execution.
+
+Measured on 2026-10-28 (H100 SXM 80 GB, driver 595.91, CUDA 13.2, image
+`runpod/pytorch:1.4.1-cu1281-torch280-ubuntu2404`): the existing `.venv-vllm`
+(torch 2.13.0+cu130, vLLM 0.32.0) loads without reinstalling. The first start
+failed during warm-up because FlashInfer JIT-compiles its top-k/top-p sampler and
+`ninja` is not on `PATH` (the system `nvcc` is 12.8, which does not match
+cu130 either). Start with the PyTorch sampler instead; the sampling parameters
+are unchanged:
+
+```bash
+VLLM_USE_FLASHINFER_SAMPLER=0 .venv-model-tools/bin/python scripts/deploy/local_models.py serve gemma4
+```
+
+With these settings Gemma-4-E4B-it used 14.6 GiB for weights and left KV cache
+for about 50 concurrent 24,576-token requests. The CH31 smoke test took 7–20 s
+per request with thinking on, and four concurrent requests ran 3.98× faster
+than serial (`output/smoke_gemma4_20261028/smoke.json`).
+
+The CPU Pod could not reach the GPU Pod's exposed TCP port. Commands were sent
+through the RunPod SSH proxy (`ssh -tt <pod>@ssh.runpod.io`, PTY only), and
+the server and runner both ran on the GPU Pod against the shared volume.
 
 The OpenAI-compatible client settings are:
 
@@ -100,3 +123,25 @@ also differ from the historical Qwen27B FP8 API deployment.
 References: [Qwen model](https://huggingface.co/Qwen/Qwen3.5-27B),
 [Gemma model](https://huggingface.co/google/gemma-4-E4B-it),
 [Gemma vLLM guide](https://docs.vllm.ai/projects/recipes/en/latest/Google/Gemma4.html).
+
+## Harness v2 single-channel rollout (2026-10-28)
+
+The harness v2 runner talks to the server above through `src/agent/vllm_provider.py`
+(`/v1/chat/completions`, `json_schema` strict output, thinking enabled, sampling
+from `configs/controller_v2/models.json`). Check the whole pipeline on CPU first,
+with no model and no network:
+
+```bash
+.venv/bin/python scripts/run/run_local_rollout.py --model gemma4 --scripted-offline \
+    --output-root output/<new folder>
+```
+
+Then, with one model served on the GPU Pod:
+
+```bash
+.venv/bin/python scripts/run/run_local_rollout.py --model gemma4 --parallel 4 \
+    --output-root output/<new folder>
+```
+
+`--parallel` only changes timing; questions, answers and the final state do not
+depend on it. A run that hits a limit is reported as a stopped state.

@@ -12,6 +12,7 @@ import base64
 import hashlib
 import json
 from pathlib import Path
+import threading
 from time import monotonic
 import urllib.request
 
@@ -48,6 +49,7 @@ class VllmProvider:
         self.calls, self.truncations = 0, 0
         self.tokens = dict(prompt_tokens=0, completion_tokens=0)
         self.seconds = 0.
+        self.lock = threading.Lock()  # the controller may call respond() from several threads
 
     def check(self):
         """The served model must be the profile's; returns what the server reports, for the manifest."""
@@ -59,9 +61,12 @@ class VllmProvider:
     def body(self, content):
         images = [{"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(p).decode()}}
                   for p in content["images"]]
+        if content.get("images_first"):  # harness v2: question and image list, images, then measurements
+            user = [{"type": "text", "text": content["preface"]}, *images, {"type": "text", "text": content["text"]}]
+        else:
+            user = [{"type": "text", "text": content["text"]}, *images]
         b = dict(model=self.profile["served_name"], max_tokens=self.profile["max_tokens"], n=1, stream=False,
-                 messages=[{"role": "system", "content": content["instructions"]},
-                           {"role": "user", "content": [{"type": "text", "text": content["text"]}, *images]}],
+                 messages=[{"role": "system", "content": content["instructions"]}, {"role": "user", "content": user}],
                  response_format={"type": "json_schema", "json_schema": {
                      "name": content["schema_name"], "strict": True, "schema": content["schema"]}},
                  chat_template_kwargs=self.profile["chat_template_kwargs"], **self.profile["sampling"])
@@ -70,19 +75,21 @@ class VllmProvider:
         return b
 
     def respond(self, content, *, folder):
-        if self.max_total_tokens is not None and sum(self.tokens.values()) >= self.max_total_tokens:
-            raise LimitStop("Token budget reached")
+        with self.lock:
+            if self.max_total_tokens is not None and sum(self.tokens.values()) >= self.max_total_tokens:
+                raise LimitStop("Token budget reached")
         body = self.body(content)
         for attempt in (1, 2):
             started = monotonic()
             raw = self.send("POST", "/v1/chat/completions", body)
             seconds = monotonic() - started
-            self.calls += 1
-            self.seconds += seconds
             write_json(Path(folder) / f"response_{attempt}.json", raw)
             usage = raw.get("usage") or {}
-            for key in self.tokens:
-                self.tokens[key] += int(usage.get(key) or 0)
+            with self.lock:
+                self.calls += 1
+                self.seconds += seconds
+                for key in self.tokens:
+                    self.tokens[key] += int(usage.get(key) or 0)
             choice = (raw.get("choices") or [{}])[0]
             finish = choice.get("finish_reason")
             self.log(dict(folder=Path(folder).name, attempt=attempt, request_sha256=content_digest(content),
@@ -91,7 +98,8 @@ class VllmProvider:
             if raw.get("model") != self.profile["served_name"]:
                 raise ProviderStop("Unexpected response model")
             if finish == "length" and attempt == 1:
-                self.truncations += 1
+                with self.lock:
+                    self.truncations += 1
                 continue
             if finish != "stop":
                 raise ProviderStop(f"Response not finished cleanly: {finish}")
@@ -102,7 +110,7 @@ class VllmProvider:
         raise ProviderStop("Truncated twice")
 
     def log(self, row):
-        with self.ledger.open("a", encoding="utf-8") as f:
+        with self.lock, self.ledger.open("a", encoding="utf-8") as f:
             f.write(json.dumps(row, sort_keys=True) + "\n")
 
     def stats(self):

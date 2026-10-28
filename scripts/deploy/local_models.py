@@ -143,7 +143,8 @@ def serve_command(config, alias, port):
         "--max-model-len", str(runtime["max_model_len"]),
         "--max-num-seqs", str(runtime["max_num_seqs"]),
         "--gpu-memory-utilization", str(runtime["gpu_memory_utilization"]),
-        "--limit-mm-per-prompt", '{"image":4,"video":0,"audio":0}',
+        "--limit-mm-per-prompt", json.dumps({"image": runtime["max_images_per_prompt"], "video": 0, "audio": 0},
+                                            separators=(",", ":")),
         "--reasoning-parser", model["reasoning_parser"],
         "--generation-config", "vllm",
     ]
