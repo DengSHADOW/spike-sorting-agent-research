@@ -147,6 +147,51 @@ class PersistenceTests(unittest.TestCase):
                 self.store.write("reviewer-a", self.case, data)
         self.assertFalse(self.store.reviews("reviewer-a"))
 
+    def test_phase_actions_reject_new_cross_phase_judgments_but_restore_legacy(self):
+        data=body();data["draft"].update(action="MERGE",target="U-002")
+        data["context"]["allow_legacy_actions"]=True
+        with self.assertRaises(ValueError):self.store.write("reviewer-a",self.case,data)
+        legacy=server.build_review(self.case,data["draft"],data["context"],allow_legacy_actions=True)
+        self.store.write("reviewer-a",self.case,body())
+        backup=self.store.export("reviewer-a");backup["reviews"][0]=legacy
+        self.store.import_backup("reviewer-b",backup,{self.case["id"]:self.case},False)
+        restored=self.store.reviews("reviewer-b")[self.case["id"]]["review"]
+        self.assertEqual(restored["expert_action"],"MERGE")
+        self.assertFalse(restored["phase_contract_compatible"])
+        pair=case();pair.update(phase_id="phase2",pair=["U-001","U-002"],ai="MERGE")
+        self.assertEqual(server.allowed(pair),["MERGE","NOT_MERGE","DISCARD","DEFER"])
+        bad=body();bad["draft"].update(action="KEEP")
+        with self.assertRaises(ValueError):server.build_review(pair,bad["draft"],{})
+        bad["draft"].update(action="NOT_MERGE",target="U-001")
+        with self.assertRaises(ValueError):server.build_review(pair,bad["draft"],{})
+        bad["draft"]["target"]="U-002"
+        self.assertTrue(server.build_review(pair,bad["draft"],{})["phase_contract_compatible"])
+
+    def test_context_pair_actions_roundtrip_without_changing_recorded_phase(self):
+        for action in ('MERGE','NOT_MERGE'):
+            with self.subTest(action=action):
+                data=body('context-'+action);data['draft'].update(scope='pair',target='U-002',action=action)
+                r=self.store.write('reviewer-'+action,self.case,data)['review']
+                self.assertEqual(r['phase'],'phase1');self.assertEqual(r['judgment_context'],'pair');self.assertEqual(r['judgment_pair'],[1,2]);self.assertFalse(r['phase_contract_compatible']);self.assertTrue(r['context_contract_compatible'])
+                backup=self.store.export('reviewer-'+action)
+                self.store.import_backup('continued-'+action,backup,{self.case['id']:self.case},False)
+                restored=self.store.reviews('continued-'+action)[self.case['id']]['review']
+                self.assertEqual(restored['judgment_pair'],[1,2]);self.assertEqual(restored['action'],action)
+        for target in ('U-001','unknown',''):
+            data=body();data['draft'].update(scope='pair',target=target,action='NOT_MERGE')
+            with self.assertRaises(ValueError):server.build_review(self.case,data['draft'],{})
+
+    def test_same_action_in_new_object_context_is_an_object_correction(self):
+        c=case();c['ai']='DISCARD';data=body();data['draft'].update(scope='pair',target='U-002')
+        r=server.build_review(c,data['draft'],{});self.assertEqual(r['disagreement_types'],['target']);self.assertEqual(r['judgment_pair'],[1,2])
+
+    def test_single_judgment_in_pair_archive_and_agreement_object_integrity(self):
+        c=case();c.update(phase_id='phase2',pair=['U-001','U-002'],ai='DISCARD')
+        data=body();data['draft'].update(scope='single',target='',action='KEEP')
+        r=server.build_review(c,data['draft'],{});self.assertEqual(r['ai_pair'],[1,2]);self.assertEqual(r['judgment_context'],'single');self.assertIsNone(r['judgment_pair'])
+        data['draft'].update(agree=True,action='DISCARD')
+        with self.assertRaisesRegex(ValueError,'recorded Agent'):server.build_review(c,data['draft'],{})
+
     def test_rationale_only_and_optional_positive_and_defer_semantics(self):
         data = body();data["draft"].update(action="KEEP", disagreement_types=["rationale"])
         r = self.store.write("reviewer-a", self.case, data)["review"]

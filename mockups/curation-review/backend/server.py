@@ -13,6 +13,7 @@ import hashlib
 import io
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import math
 from pathlib import Path
 import re
 import secrets
@@ -31,7 +32,7 @@ STATIC = ROOT / "mockups/curation-review/dist"
 STORE = ROOT / "output/curation_review_local"
 SCHEMA = "spikeagent-human-review-v3"
 PHASE_ACTIONS = {"phase1": ["KEEP", "SPLIT", "DISCARD"], "phase2": ["MERGE", "NOT_MERGE", "DISCARD"]}
-TABS = {"detail", "overview", "gallery", "timing", "amplitude", "stability", "tree", "pair", "quality"}
+TABS = {"detail", "overview", "gallery", "timing", "amplitude", "stability", "tree", "pair", "quality", "correlation", "pca"}
 MISSING_EVIDENCE = {"waveform", "timing", "amplitude", "spatial", "split_tree", "recording_context", "other"}
 
 
@@ -57,26 +58,61 @@ def sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def allowed(case):
+def legacy_allowed(case):
     source = next(u for u in case["units"] if u["id"] == case["source"])
     return ["KEEP"] + (["SPLIT"] if source["split"] else []) + ["DISCARD"] + (["MERGE"] if len(case["units"]) > 1 else []) + (["NOT_MERGE"] if case["pair"] else []) + ["DEFER"]
 
 
-def build_review(case, draft, context):
+def allowed(case,draft=None):
+    if draft is not None and 'scope' in draft:
+        scope=draft['scope']
+        if scope not in ('single','pair'):return []
+        if scope=='pair' and not any(u['id']==draft.get('target') and u['id']!=case['source'] for u in case['units']):return []
+        source=next(u for u in case['units'] if u['id']==case['source'])
+        return [a for a in PHASE_ACTIONS['phase2' if scope=='pair' else 'phase1'] if a!='SPLIT' or source['split']]+['DEFER']
+
+    source=next(u for u in case["units"] if u["id"]==case["source"])
+    units={u["id"] for u in case["units"]}
+    pair=case.get("pair")
+    valid_pair=isinstance(pair,list) and len(pair)==2 and pair[0]!=pair[1] and all(i in units for i in pair)
+    return [a for a in PHASE_ACTIONS.get(case["phase_id"],[]) if (a!="SPLIT" or source["split"]) and (a not in ("MERGE","NOT_MERGE") or valid_pair)]+["DEFER"]
+
+
+def quality_evidence(value,case):
+    if value is None:return None
+    if not isinstance(value,dict) or value.get('schema')!='spikeagent-quality-v1' or value.get('dataset_id')!=case['dataset_id'] or value.get('source_sha256')!=case['mat_sha256'] or value.get('state_sha256')!=case['state_sha256']:raise ValueError('Quality evidence belongs to another grouping')
+    if value.get('direction') not in ('higher','lower') or not isinstance(value.get('rows'),list) or not 1<=len(value['rows'])<=10000:raise ValueError('Invalid quality evidence')
+    result={k:value[k] for k in ('schema','dataset_id','source_sha256','state_sha256','direction')}
+    result['metric']=string(value.get('metric',''),100);result['provenance']=string(value.get('provenance',''),500)
+    if not result['metric'] or not result['provenance']:raise ValueError('Quality metric and source required')
+    ids={u['cluster_id'] for u in case['units']};seen=set();rows=[]
+    for row in value['rows']:
+        if not isinstance(row,dict) or type(row.get('cluster_id')) is not int or row['cluster_id'] not in ids or row['cluster_id'] in seen:raise ValueError('Invalid quality cluster')
+        seen.add(row['cluster_id']);score=row.get('score')
+        if score is not None and (type(score) not in (int,float) or not math.isfinite(score)):raise ValueError('Invalid quality score')
+        rows.append(dict(cluster_id=row['cluster_id'],score=score,label=string(row.get('label',''),100)))
+    result['rows']=rows;return result
+
+
+def build_review(case, draft, context, *, allow_legacy_actions=False):
     """Rebuild canonical provenance on the server; do not trust client metadata."""
     if not isinstance(draft, dict) or not isinstance(context, dict):
         raise ValueError("Expected draft and context objects")
     agree, action = draft.get("agree"), draft.get("action")
     manual=case.get("review_mode")=="manual"
-    if (agree is not None if manual else type(agree) is not bool) or action not in allowed(case):
+    if (agree is not None if manual else type(agree) is not bool) or action not in (legacy_allowed(case) if allow_legacy_actions and 'scope' not in draft else allowed(case,draft)):
         raise ValueError("Choose an explicit judgment and an available action")
     types = draft.get("disagreement_types", [])
     if not isinstance(types, list) or any(t not in ("action", "target", "rationale", "evidence") for t in types):
         raise ValueError("Invalid disagreement categories")
+    if case.get("rationale_available") is False and ("rationale" in types or context.get("rationale_viewed")):
+        raise ValueError("No retained rationale exists for this response; review the action or evidence instead")
     units = {u["id"]: u for u in case["units"]}
     source = units[case["source"]]["cluster_id"]
     ai_pair = [units[i]["cluster_id"] for i in case["pair"]] if case["pair"] else None
     target_id = draft.get("target")
+    if 'scope' not in draft and not allow_legacy_actions and case["phase_id"]=="phase2" and action=="NOT_MERGE" and target_id not in (None,"",case["pair"][1]):
+        raise ValueError("Keep separate applies to the recorded pair")
     if action == "MERGE" and (not isinstance(target_id, str) or target_id not in units or target_id == case["source"]):
         raise ValueError("Merge target must be a different active cluster in this recording/state")
     target = units[target_id]["cluster_id"] if action == "MERGE" else None
@@ -100,10 +136,14 @@ def build_review(case, draft, context):
     if "other" in missing and not missing_note and not note:
         raise ValueError("Explain the other missing evidence")
     differences = set(types)
+    if not manual and 'scope' in draft and (draft['scope']!=('pair' if case['pair'] else 'single') or draft['scope']=='pair' and target_id!=case['pair'][1]):
+        differences.add('target')
     if not manual and action != case["ai"]:
         differences.add("action")
-    if action == "MERGE" and case["ai"] == "MERGE" and target != ai_pair[1]:
+    if action in ("MERGE","NOT_MERGE") and action == case["ai"] and units.get(target_id,{}).get("cluster_id") != ai_pair[1]:
         differences.add("target")
+    if agree and 'scope' in draft and (draft['scope']!=('pair' if case['pair'] else 'single') or draft['scope']=='pair' and target_id!=case['pair'][1]):
+        raise ValueError('Agreement must preserve the recorded Agent object and pair')
     if agree and differences:
         raise ValueError("Agreement must preserve the action, merge target and explanation")
     if ((not agree and not manual) or (manual and action!="KEEP")) and not reason and not note and not (action=="DEFER" and sufficiency=="insufficient" and (missing or missing_note)):
@@ -122,6 +162,8 @@ def build_review(case, draft, context):
         raise ValueError("Unknown evidence object/tab")
     if type(context.get("rationale_viewed", False)) is not bool:
         raise ValueError("Invalid rationale exposure")
+    if type(context.get('jacob_reference_viewed',False)) is not bool:
+        raise ValueError('Invalid reference exposure')
     comparisons = context.get("pair_comparisons", [])
     if (not isinstance(comparisons,list) or len(comparisons)>len(units)
             or any(not isinstance(pair,list) or len(pair)!=2 or pair[0]!=case["source"]
@@ -141,15 +183,21 @@ def build_review(case, draft, context):
         expert_confidence=confidence, evidence_sufficiency=sufficiency, missing_evidence=missing,
         missing_evidence_note=missing_note,
         action=action, execution_status="not_executed", phase_contract_compatible=action in PHASE_ACTIONS[case["phase_id"]],
+        quality_evidence=quality_evidence(context.get("quality_evidence"),case),
         spike_counts={str(u["cluster_id"]): u["spikes"] for u in case["units"]},
         displayed_trace_count=case["displayed_trace_count"], reviewer_trace_limit=24, waveform_units="source units",
         evidence_id=case["evidence_id"], visible_cluster_set=[units[i]["cluster_id"] for i in dict.fromkeys(visible)],
         viewed_cluster_ids=[units[i]["cluster_id"] for i in dict.fromkeys(viewed)],
         model_visible_cluster_set=[units[i]["cluster_id"] for i in model_ids], viewed_tabs=list(dict.fromkeys(tabs)),
-        rationale_viewed=context.get("rationale_viewed", False),
+        rationale_viewed=context.get("rationale_viewed", False),jacob_reference_viewed=context.get('jacob_reference_viewed',False),
         pair_comparisons=[[units[i]["cluster_id"] for i in pair] for pair in comparisons],
-        additional_evidence_viewed=manual or any(t in ("overview", "gallery", "stability", "pair", "quality") for t in tabs) or any(i not in model_ids for i in viewed),
+        additional_evidence_viewed=manual or bool(case.get("study_id")) or any(t in ("overview", "gallery", "stability", "pair", "quality", "correlation", "pca") for t in tabs) or any(i not in model_ids for i in viewed),
         timestamp=now(), annotator=string(context.get("annotator", ""), 100) or None)
+    for field in ("study_id","study_agent_id","comparison_case_id","rationale_available","response_sha256","evidence_scope","comparison_protocol_note"):
+        if field in case:result[field]=case[field]
+    if case.get("study_id"):result["review_mode"]="blinded_historical_comparison"
+    if 'scope' in draft:
+        result.update(judgment_context=draft['scope'],judgment_pair=[source,units[target_id]['cluster_id']] if draft['scope']=='pair' else None,context_contract_compatible=action!='DEFER')
     return result
 
 
@@ -287,14 +335,21 @@ class ReviewStore:
                 reason=r.get("expert_reason",""),note=r.get("expert_note",""),positive=r.get("expert_positive_comment",""),
                 disagreement_types=r.get("disagreement_types",[]),confidence=r.get("expert_confidence"),
                 sufficiency=r.get("evidence_sufficiency","unspecified"),missing=r.get("missing_evidence",[]),missing_note=r.get("missing_evidence_note",""))
-            context=dict(annotator=r.get("annotator") or "",viewed_tabs=r.get("viewed_tabs",["detail"]),
+            if 'judgment_context' in r:
+                d['scope']=r['judgment_context']
+                pair=r.get('judgment_pair')
+                if d['scope']=='pair':
+                    if not isinstance(pair,list) or len(pair)!=2 or pair[0]!=source or any(type(i) is not int or i not in unit_map for i in pair):raise ValueError('Invalid backup judgment pair')
+                    d['target']=unit_map[pair[1]]
+            context=dict(quality_evidence=r.get("quality_evidence"),annotator=r.get("annotator") or "",viewed_tabs=r.get("viewed_tabs",["detail"]),
                 viewed_cluster_ids=[unit_map[i] for i in r.get("viewed_cluster_ids",[]) if i in unit_map],
                 visible_cluster_ids=[unit_map[i] for i in r.get("visible_cluster_set",[]) if i in unit_map],rationale_viewed=r.get("rationale_viewed",False))
             pairs=r.get("pair_comparisons",[])
             if (not isinstance(pairs,list) or any(not isinstance(pair,list) or len(pair)!=2 or any(type(i) is not int or i not in unit_map for i in pair) for pair in pairs)):
                 raise ValueError("Invalid backup pair comparison exposure")
             context["pair_comparisons"]=[[unit_map[i] for i in pair] for pair in pairs]
-            rebuilt=build_review(c,d,context)
+            context['jacob_reference_viewed']=r.get('jacob_reference_viewed',False)
+            rebuilt=build_review(c,d,context,allow_legacy_actions=True)
             rebuilt["reviewer_id"]=reviewer
             rebuilt["imported_from"]=dict(reviewer_id=payload.get("reviewer_id"),timestamp=r.get("timestamp"))
             prepared.append(rebuilt)
@@ -386,6 +441,15 @@ class ReviewApplication:
         self.analysis_service = None
         self.analysis_lock = threading.Lock()
         self.csrf = secrets.token_urlsafe(32)
+        self.working_inputs = None
+        self.working_lock=threading.Lock()
+
+    def working(self):
+        with self.working_lock:
+            if self.working_inputs is None:
+                from working_data import WorkingInputs
+                self.working_inputs=WorkingInputs(self.store.path.parent)
+        return self.working_inputs
 
     def analysis(self, case_id, cluster_id=None, target_id=None):
         with self.analysis_lock:
@@ -400,7 +464,8 @@ class ReviewApplication:
 
     @property
     def bundle(self):
-        return self.datasets.get() or dict(dataset_id=None,n_spikes=0,cases=[],sampling_rate_hz=None,provenance={})
+        summaries=self.datasets.summaries()
+        return (self.datasets.get(summaries[0]["id"]) if summaries else None) or dict(dataset_id=None,n_spikes=0,cases=[],sampling_rate_hz=None,provenance={})
 
     def asset(self, name):
         path,expected=self.datasets.asset_path(name)
@@ -446,6 +511,9 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("Browser reviewer identity is missing")
         return value
 
+    def request_origin(self):
+        return "http://" + self.headers.get("Host", "")
+
     def do_GET(self):
         try:
             self.check_host()
@@ -453,8 +521,16 @@ class Handler(BaseHTTPRequestHandler):
             query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
             if path == "/api/status":
                 self.reply(dict(status="ready", csrf_token=self.app.csrf, synthetic=False,
-                    dataset_id=self.app.bundle["dataset_id"], cases=len(self.app.cases), n_spikes=self.app.bundle["n_spikes"], model_calls_enabled=False,
+                    dataset_id=self.app.bundle["dataset_id"], cases=sum(b["cases"] for b in self.app.datasets.summaries()), n_spikes=self.app.bundle["n_spikes"], model_calls_enabled=False,
                     bundles=self.app.datasets.summaries(),max_upload_bytes=MAX_UPLOAD))
+            elif path == "/api/curation/datasets":
+                self.reply(dict(datasets=self.app.working().datasets(),max_upload_bytes=MAX_UPLOAD))
+            elif path == "/api/curation/package":
+                self.reply(self.app.working().get(string(query.get('dataset_id',[''])[0],150)),content_type='application/gzip')
+            elif path == "/api/curation/reference":
+                dataset=string(query.get('dataset_id',[''])[0],150)
+                if dataset not in ALLOWED:raise ValueError('Unknown reference dataset')
+                self.reply(dict(references=self.app.working().references(dataset)))
             elif path == "/api/datasets":
                 self.reply(dict(bundles=self.app.datasets.summaries(),inputs=self.app.datasets.inputs(),max_upload_bytes=MAX_UPLOAD))
             elif path == "/api/imports":
@@ -464,13 +540,30 @@ class Handler(BaseHTTPRequestHandler):
                 bundle=self.app.datasets.get(bundle_id)
                 if bundle is None:raise KeyError("No imported dataset")
                 self.reply(dict(dataset_id=bundle["dataset_id"], n_spikes=bundle["n_spikes"],source_kind=bundle["source_kind"],run_status=bundle["run_status"],
-                    sampling_rate_hz=bundle["sampling_rate_hz"], provenance=bundle["provenance"], cases=bundle["cases"]))
+                    sampling_rate_hz=bundle["sampling_rate_hz"], provenance=bundle["provenance"], cases=bundle["cases"],
+                    study_id=bundle.get("study_id"),study_agent_id=bundle.get("study_agent_id")))
             elif path.startswith("/api/evidence/"):
                 self.reply(self.app.evidence(path.split("/", 3)[3]))
+            elif path.startswith("/api/correlograms/"):
+                cluster = query.get("cluster", [None])[0]
+                target = query.get("target", [None])[0]
+                self.app.analysis(path.split("/", 3)[3], cluster, target)
+                self.reply(self.app.analysis_service.correlograms(path.split("/", 3)[3], cluster, target))
             elif path.startswith("/api/analysis/"):
                 cluster=query.get("cluster",[None])[0]
                 target=query.get("target",[None])[0]
                 self.reply(self.app.analysis(path.split("/",3)[3],cluster,target))
+            elif path.startswith("/review-pca/"):
+                root=(STORE/"review_pca_v1").resolve()
+                target=(root/path.removeprefix("/review-pca/")).resolve()
+                if not target.is_relative_to(root) or target.suffix not in (".png",".json") or not target.is_file():raise KeyError("Unknown PCA evidence")
+                self.reply(target.read_bytes(),content_type="image/png" if target.suffix==".png" else "application/json; charset=utf-8")
+            elif path.startswith("/review-waveforms/"):
+                root=(STORE/"review_waveforms_full_v1").resolve()
+                target=(root/path.removeprefix("/review-waveforms/")).resolve()
+                if not target.is_relative_to(root) or target.suffix not in (".png",".json") or not target.is_file():
+                    raise KeyError("Unknown full-waveform evidence")
+                self.reply(target.read_bytes(),content_type="image/png" if target.suffix==".png" else "application/json; charset=utf-8")
             elif path.startswith("/api/assets/"):
                 self.reply(self.app.asset(path.split("/", 3)[3]), content_type="image/png")
             elif path == "/api/reasons":
@@ -494,7 +587,12 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 name = "index.html" if path == "/" else path.lstrip("/")
                 allowed_files = {"index.html": "text/html; charset=utf-8", "style.css": "text/css; charset=utf-8",
-                    "app.js": "text/javascript; charset=utf-8", "analysis.js":"text/javascript; charset=utf-8", "inputs.js":"text/javascript; charset=utf-8", "review-core.js": "text/javascript; charset=utf-8"}
+                    "app.js": "text/javascript; charset=utf-8", "agent-study.js":"text/javascript; charset=utf-8", "cloud-auth.js":"text/javascript; charset=utf-8", "analysis.js":"text/javascript; charset=utf-8", "inputs.js":"text/javascript; charset=utf-8", "review-core.js": "text/javascript; charset=utf-8"}
+                allowed_files.update({name:"text/javascript; charset=utf-8" for name in ("private-data.js","working-import.js","review-quality.js","review-pca.js","pca-core.js","review-working.js","queue-gallery.js","review-correlograms.js","review-reasons.js","reviewer-profiles.js","review-audit.js","closed-agent.js","activity-core.js","activity-ui.js","waveform-worker.js","waveform-view.js","curation-reasons.js","curation-workspace.js")})
+                allowed_files.update({'curation.html':'text/html; charset=utf-8','curation-core.js':'text/javascript; charset=utf-8','curation-ui.js':'text/javascript; charset=utf-8','curation.css':'text/css; charset=utf-8','activity.css':'text/css; charset=utf-8'})
+                allowed_files.update({'review-studio.html':'text/html; charset=utf-8','action-reasons.js':'text/javascript; charset=utf-8','review-studio.js':'text/javascript; charset=utf-8','review-studio.css':'text/css; charset=utf-8'})
+                # Draft of the 2026-10-26 redesign; shares curation-core.js, separate page.
+                allowed_files.update({'review-v2.html':'text/html; charset=utf-8','review-v2.js':'text/javascript; charset=utf-8','review-v2.css':'text/css; charset=utf-8'})
                 if name not in allowed_files:
                     raise KeyError("Unknown static file")
                 self.reply((STATIC / name).read_bytes(), content_type=allowed_files[name])
@@ -511,11 +609,17 @@ class Handler(BaseHTTPRequestHandler):
         try:
             self.check_host()
             origin = self.headers.get("Origin")
-            if origin and origin != "http://" + self.headers.get("Host"):
+            if origin and origin != self.request_origin():
                 raise PermissionError("Cross-origin writes are not allowed")
             if self.headers.get("X-CSRF-Token") != self.app.csrf:
                 raise PermissionError("Refresh the page to reconnect before saving")
             path = urlsplit(self.path).path
+            if path=="/api/curation/uploads":
+                if self.headers.get('Content-Type','').split(';')[0]!='application/octet-stream':raise ValueError('Upload MAT bytes')
+                query=parse_qs(urlsplit(self.path).query)
+                self.connection.settimeout(120)
+                self.reply(self.app.working().upload(self.rfile,int(self.headers.get('Content-Length','0')),query.get('filename',[''])[0],query.get('recording_id',[''])[0]),201)
+                return
             if path=="/api/uploads":
                 if self.headers.get("Content-Type","").split(";")[0]!="application/octet-stream":
                     raise ValueError("Upload MAT bytes as application/octet-stream")
@@ -531,7 +635,9 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length))
             if not isinstance(body, dict):
                 raise ValueError("Expected a JSON object")
-            if path == "/api/reasons/import":
+            if path == '/api/curation/import-path':
+                self.reply(self.app.working().import_path(body.get('path'),body.get('recording_id')),201)
+            elif path == "/api/reasons/import":
                 self.reply(dict(status="saved",**self.app.store.import_reasons(body.get("reasons"))))
             elif path=="/api/reasons/import-file":
                 content=string(body.get("content"),4_000_000).lstrip("\ufeff")

@@ -83,13 +83,20 @@ test('pair reviews allow DISCARD; DEFER stays outside the backend action contrac
   assert.equal(Core.validStoredReview(keep, deferred), true);
 });
 
-test('leaf SPLIT is unavailable and expert proposals do not silently widen model phase actions', () => {
+test('phase actions are enforced on new judgments while legacy feedback remains readable', () => {
   assert.equal(Core.allowed(leaf).includes('SPLIT'), false);
   assert.match(Core.validate(leaf, draft({action: 'SPLIT'})), /available expert action/);
-  const r = Core.buildReview(keep, draft({agree: false, action: 'MERGE', target: keep.units[1].id, reason: 'Compare this other cluster.'}));
+  assert.deepEqual(Core.allowed(pair), ['MERGE','NOT_MERGE','DISCARD','DEFER']);
+  assert.equal(Core.allowed(keep).includes('MERGE'), false);
+  assert.match(Core.validate(pair,draft({agree:false,action:'KEEP',reason:'test'})),/available expert action/);
+  const d=draft({agree: false, action: 'MERGE', target: keep.units[1].id, reason: 'Compare this other cluster.'});
+  assert.throws(()=>Core.buildReview(keep,d,{allowLegacy:true}),/available expert action/);
+  const r = Core.buildReview(keep,d,{},true);
   assert.equal(r.phase, 'phase1');
   assert.equal(r.phase_contract_compatible, false);
   assert.equal(r.execution_status, 'not_executed');
+  assert.equal(Core.validStoredReview(keep,r),true);
+  assert.match(Core.validate(pair,draft({agree:false,action:'NOT_MERGE',target:'U-034',reason:'test'})),/recorded pair/);
 });
 
 test('positive comments and reusable reasons keep their distinct purposes and provenance', () => {
@@ -142,3 +149,18 @@ test('invalid confidence and inconsistent missing-evidence requests cannot be sa
   assert.match(Core.validate(keep,draft({sufficiency:'insufficient',missing:['other']})),/other missing/);
   assert.throws(()=>Core.buildReview(keep,draft(),{pair_comparisons:[[keep.source,keep.source]]}),/compared cluster/);
 });
+
+test('explicit comparison context enables merge and keep-separate from a recorded single-cluster case',()=>{
+ const target=keep.units.find(u=>u.id!==keep.source).id;
+ for(const action of ['MERGE','NOT_MERGE']){
+  const d=draft({agree:false,scope:'pair',target,action,reason:'Selected candidate pair judgment'}),r=Core.buildReview(keep,d);
+  assert.equal(r.phase,'phase1');assert.equal(r.judgment_context,'pair');assert.deepEqual(r.judgment_pair,[keep.units.find(u=>u.id===keep.source).cluster_id,keep.units.find(u=>u.id===target).cluster_id]);assert.equal(r.phase_contract_compatible,false);assert.equal(r.context_contract_compatible,true);assert.equal(Core.validStoredReview(keep,r),true);
+ }
+ assert.match(Core.validate(keep,draft({agree:false,scope:'pair',target:keep.source,action:'MERGE',reason:'bad'})),/available expert action/);
+});
+test('clearing a recorded pair allows single-cluster judgments without rewriting recorded provenance',()=>{
+ const r=Core.buildReview(pair,draft({agree:false,scope:'single',action:'KEEP',reason:'Inspect source alone'}));assert.equal(r.phase,'phase2');assert.equal(r.judgment_context,'single');assert.equal(r.judgment_pair,null);assert.deepEqual(r.ai_pair,[8,21]);assert.equal(Core.validStoredReview(pair,r),true);
+ const d=draft({agree:true,scope:'pair',target:'U-034',action:'MERGE'});assert.match(Core.validate(pair,d),/Agree must preserve/);
+});
+
+test('same action on a different comparison object records an object correction',()=>{const c={...keep,ai:'DISCARD'},d=draft({agree:false,scope:'pair',target:keep.units[1].id,action:'DISCARD',reason:'Source judged with this comparison'}),r=Core.buildReview(c,d);assert.deepEqual(r.disagreement_types,['target']);assert.equal(r.judgment_context,'pair');});

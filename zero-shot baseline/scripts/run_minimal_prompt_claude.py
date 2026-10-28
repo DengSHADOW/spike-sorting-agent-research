@@ -16,11 +16,21 @@ Same protocol as scripts/run/run_minimal_prompt_baseline.py (Astra) except the p
     a resumed run replays the source's saved responses locally, request hash by request hash, without
     re-billing, and continues live from the first request that has no accepted response.
 The original Astra runner, its prompts and its results are not modified.
+
+--agent selects a separate condition, agentic-free v1 (rollout only, no stepwise): there is no scheduler.
+Each turn Opus sees the active-cluster table, its own action record and the observation it requested last,
+and chooses INSPECT / COMPARE / KEEP / SPLIT / MERGE / DISCARD / FINISH (v1 adds KEEP, which changes no state
+but is recorded; v0 had no KEEP and its two runs were stopped unfinished). The harness only renders observations
+(same raw_member_v1 renderer), validates and executes actions (same ClusterManager executor and checkpoints)
+and enforces safety limits. Non-executable actions change nothing and are reported back to the model.
+Results are not comparable with the engineering_v1 rollouts above and must be reported separately.
+--model (agent runs only) selects claude-opus-5-5 (default) or claude-fable-5-1; refusal fallback stays disabled.
 """
 from __future__ import annotations
 
 import argparse
 import base64
+from collections import Counter
 import copy
 import importlib.metadata
 import json
@@ -41,7 +51,8 @@ from scipy.io import loadmat  # noqa: E402
 from scripts.analysis import curation_one_to_one  # noqa: E402
 from scripts.run import run_minimal_prompt_baseline as rb  # noqa: E402
 from scripts.run import run_curation_stage6 as infra  # noqa: E402
-from src.pipeline.curation_engineering_v1 import ControllerStop, arrays_hash, digest, write_json  # noqa: E402
+from src.agent.curation_observation_v1 import metrics as observation_metrics  # noqa: E402
+from src.pipeline.curation_engineering_v1 import CurationController, ControllerStop, arrays_hash, digest, write_json  # noqa: E402
 
 BASE, INDEX, DATASETS = rb.BASE, rb.INDEX, rb.DATASETS
 sha256, observe, load_actor, require_dataset = rb.sha256, rb.observe, rb.load_actor, rb.require_dataset
@@ -58,6 +69,27 @@ PRICES = {
     "reserve_input_multiplier": 1.10, "reserve_extra_input_tokens": 1024, "max_input_tokens": 200000,
     "note": "Usage estimates, not invoices.",
 }
+
+
+# --agent --model: per-model settings; the minimal (v1) campaign above always uses Opus 5.5.
+# max_tokens is not visible to the model; Fable 5.1 turns can be longer, so it gets a larger ceiling.
+MODEL_SETTINGS = {
+    "claude-opus-5-5": dict(max_tokens=MAX_TOKENS, pricing=PRICES),
+    "claude-fable-5-1": dict(max_tokens=16000, pricing={
+        "checked_on": "2026-10-26",
+        "source": "Claude API skill model table (cached 2026-10-06); recheck in the Claude Console before paid use",
+        "standard_usd_per_million": {"input": 10.0, "cache_write_5m": 12.5, "cache_read": 0.25, "output": 50.0},
+        "reserve_input_multiplier": 1.10, "reserve_extra_input_tokens": 1024, "max_input_tokens": 200000,
+        "note": "Usage estimates, not invoices."}),
+}
+
+
+def use_model(name):
+    """Select the model for an --agent run before any request is built; rebinds the module settings."""
+    global MODEL, MAX_TOKENS, PRICES, AGENT_SCOPE
+    settings = MODEL_SETTINGS[name]
+    MODEL, MAX_TOKENS, PRICES = name, settings["max_tokens"], settings["pricing"]
+    AGENT_SCOPE = f"agentic-free-v1-four-channel-rollout-{name}"
 
 
 class ClaudeStop(RuntimeError):
@@ -127,11 +159,11 @@ def money(uncached_input, output, cache_write=0, cache_read=0, *, conservative=F
             + cache_read * p["cache_read"] + output * p["output"]) / 1e6
 
 
-def reserve(charged, limit, n_input, max_output=MAX_TOKENS):
+def reserve(charged, limit, n_input, max_output=None):
     if type(n_input) is not int or n_input <= 0 or n_input > PRICES["max_input_tokens"]:
         raise ClaudeStop("Invalid or out-of-protocol input token count")
     padded = math.ceil(n_input * PRICES["reserve_input_multiplier"] + PRICES["reserve_extra_input_tokens"])
-    amount = money(padded, max_output, conservative=True)
+    amount = money(padded, MAX_TOKENS if max_output is None else max_output, conservative=True)
     if charged + amount > limit + 1e-12:
         raise ClaudeStop("Remaining budget cannot cover next request's reserved maximum")
     return amount
@@ -148,7 +180,8 @@ def usage_cost(raw):
             "standard_estimate_usd": money(n, m, cw, cr)}
 
 
-def decision_from_response(raw, phase):
+def answer_from_response(raw):
+    """The single JSON answer of a clean end_turn message; schema checks are the caller's."""
     if raw.get("type") != "message" or raw.get("role") != "assistant":
         raise ClaudeStop("Not an assistant message")
     model = raw.get("model", "")
@@ -166,9 +199,13 @@ def decision_from_response(raw, phase):
     if len(texts) != 1:
         raise ClaudeStop("Expected one JSON answer")
     try:
-        answer = json.loads(texts[0])
+        return json.loads(texts[0])
     except (ValueError, TypeError) as exc:
         raise ClaudeStop("Response JSON parse failed") from exc
+
+
+def decision_from_response(raw, phase):
+    answer = answer_from_response(raw)
     if (not isinstance(answer, dict) or set(answer) != {"action", "rationale"}
             or answer["action"] not in rb.ACTIONS[phase] or not isinstance(answer["rationale"], str)):
         raise ClaudeStop("Response schema invalid")
@@ -475,7 +512,7 @@ def verify(out):
     return m
 
 
-def authorize(out, budget):
+def authorize(out, budget, scope=SCOPE):
     if type(budget) not in (int, float) or not math.isfinite(budget) or budget <= 0:
         raise ValueError("Explicit finite budget required")
     if (out / "execution_started.json").exists():
@@ -484,7 +521,7 @@ def authorize(out, budget):
     if path.is_symlink():
         raise ValueError("Authorization symlink prohibited")
     a = accounting.read_json(path)
-    if (type(a.get("budget_usd")) not in (int, float) or a["budget_usd"] != budget or a.get("scope") != SCOPE
+    if (type(a.get("budget_usd")) not in (int, float) or a["budget_usd"] != budget or a.get("scope") != scope
             or a.get("manifest_sha256") != sha256(out / "manifest.json")):
         raise ValueError("Authorization mismatch")
 
@@ -541,9 +578,33 @@ def rebuild_preflight(out, dataset_id, payload):
     return req
 
 
+def score_terminal(folder, row, r):
+    """Add one-to-one / many-to-one scores of a completed terminal against the registered MAT (in place)."""
+    from scripts.analysis.collect_curation_stage6 import evaluate, deletion_audit
+    checkpoint = folder / "terminal.npz"
+    if sha256(checkpoint) != accounting.read_json(checkpoint.with_suffix(".json"))["sha256"]:
+        raise ValueError("Terminal corrupted")
+    with np.load(checkpoint, allow_pickle=False) as a:
+        final = a["assigns"].copy()
+        if arrays_hash(final, a["tree"]) != r["final_sha256"]:
+            raise ValueError("Final state mismatch")
+    actor, fs = load_actor(row)
+    path = ROOT / row["mat_path"]
+    if h5py.is_hdf5(path):
+        with h5py.File(path, "r") as f:
+            gt = f["spikes/curation/assigns"][:].flatten()
+    else:
+        gt = np.asarray(loadmat(str(path), struct_as_record=False, squeeze_me=True,
+                                variable_names=['spikes'])['spikes'].curation.assigns).reshape(-1)
+    r["one_to_one"] = curation_one_to_one.evaluate(final, gt)
+    r["no_curation_one_to_one"] = curation_one_to_one.evaluate(actor.assigns, gt)
+    r["final_metrics"] = r["many_to_one"] = evaluate(final, gt, actor.spike_times, fs)
+    r["no_curation_metrics"] = r["no_curation_many_to_one"] = evaluate(actor.assigns, gt, actor.spike_times, fs)
+    r["deletions_containing_expert_spikes"] = deletion_audit(folder, accounting.read_jsonl(folder / "events.jsonl"), gt)
+
+
 def collect(out):
     """Score ONLY this run's own terminals against the MAT registered in this run's manifest."""
-    from scripts.analysis.collect_curation_stage6 import evaluate, deletion_audit
     from scripts.analysis import minimal_stepwise
     from score_terminal_matching import report_lines
     m = verify(out)
@@ -555,27 +616,7 @@ def collect(out):
         if (folder / "summary.json").exists():
             r.update(accounting.read_json(folder / "summary.json"))
             if r["status"] == "completed" and r["terminal_evaluation_allowed"]:
-                checkpoint = folder / "terminal.npz"
-                if sha256(checkpoint) != accounting.read_json(checkpoint.with_suffix(".json"))["sha256"]:
-                    raise ValueError("Terminal corrupted")
-                with np.load(checkpoint, allow_pickle=False) as a:
-                    final = a["assigns"].copy()
-                    if arrays_hash(final, a["tree"]) != r["final_sha256"]:
-                        raise ValueError("Final state mismatch")
-                actor, fs = load_actor(row)
-                path = ROOT / row["mat_path"]
-                if h5py.is_hdf5(path):
-                    with h5py.File(path, "r") as f:
-                        gt = f["spikes/curation/assigns"][:].flatten()
-                else:
-                    gt = np.asarray(loadmat(str(path), struct_as_record=False, squeeze_me=True,
-                                            variable_names=['spikes'])['spikes'].curation.assigns).reshape(-1)
-                r["one_to_one"] = curation_one_to_one.evaluate(final, gt)
-                r["no_curation_one_to_one"] = curation_one_to_one.evaluate(actor.assigns, gt)
-                r["final_metrics"] = r["many_to_one"] = evaluate(final, gt, actor.spike_times, fs)
-                r["no_curation_metrics"] = r["no_curation_many_to_one"] = evaluate(actor.assigns, gt, actor.spike_times, fs)
-                r["deletions_containing_expert_spikes"] = deletion_audit(folder, accounting.read_jsonl(folder / "events.jsonl"), gt)
-                del actor
+                score_terminal(folder, row, r)
         results.append(r)
     dest = BASE / "results" / out.name
     dest.mkdir(parents=True, exist_ok=False)
@@ -628,10 +669,11 @@ def phase_index(source):
     return phases
 
 
-def plan_replay(ledger, responses, phases):
+def plan_replay(ledger, responses, phases=None, *, accept=None):
     """Attempts with saved responses, in call order; drop the tail request unless it ended accepted.
 
-    ledger: provider_ledger rows; responses: {call: raw}; phases: {request_sha256: phase}.
+    ledger: provider_ledger rows; responses: {call: raw}; phases: {request_sha256: phase};
+    accept: alternative tail check (raw -> answer, raising ClaudeStop), e.g. agent_decision.
     """
     counted, attempts = {}, []
     for e in ledger:
@@ -648,7 +690,10 @@ def plan_replay(ledger, responses, phases):
     if plan:
         tail, ok = plan[-1]["request_sha256"], True
         try:
-            decision_from_response(plan[-1]["raw"], phases[tail])
+            if accept is not None:
+                accept(plan[-1]["raw"])
+            else:
+                decision_from_response(plan[-1]["raw"], phases[tail])
         except (ClaudeStop, KeyError):
             ok = False
         if not ok:
@@ -769,6 +814,466 @@ def execute(out, budget, *, resume=False, pilot_stepwise=None):
         collect(out)
 
 
+# ---------------------------------------------------------------- agentic-free v1 ---------------
+
+AGENT_SCOPE = "agentic-free-v1-four-channel-rollout-claude-opus-5-5"
+AGENT_ACTIONS = ("INSPECT", "COMPARE", "KEEP", "SPLIT", "MERGE", "DISCARD", "FINISH")
+SINGLE, PAIR = {"INSPECT", "KEEP", "SPLIT", "DISCARD"}, {"COMPARE", "MERGE"}
+# Safety limits, not scheduling. One limit for every channel: a per-channel limit, shown as turns_remaining,
+# would reveal how much work earlier runs needed there. 3200 > 2x the most decisions of any v1 rollout
+# (Astra minimal CH30: 1,589). Reaching the limit leaves the channel incomplete; the budget is the cost guard.
+AGENT_TURN_LIMIT = 3200
+AGENT_INVALID_STREAK = 10  # consecutive non-executable actions that end the channel
+AGENT_PROMPT = """You are curating extracellular spike clusters. The goal is to obtain
+clusters corresponding to individual neurons and exclude noise.
+
+You curate one recording over a series of turns, one action per turn.
+Each turn shows the active clusters with their measurements, the record of
+your earlier actions in this recording and their results, and the images
+and measurements returned by your previous action, if it requested any.
+Images from earlier turns are not shown again. You decide which clusters
+to examine, in what order, and when curation is complete.
+
+Actions:
+- INSPECT cluster: returns its waveform overlay, ISI histogram, amplitude
+  distribution and hierarchical aggregation tree.
+  Tree: leaves are initial subclusters; branches show their merge history.
+- COMPARE source, target: returns source waveforms, target waveforms and
+  the ISI histogram after a hypothetical merge, with pair measurements.
+- KEEP cluster: retain the cluster; nothing changes and it is noted in
+  your record.
+- SPLIT cluster: undo the cluster's last hierarchical merge; both resulting
+  clusters become active.
+- MERGE source, target: combine the source into the target as one neuron.
+- DISCARD cluster: remove the cluster from the active sorting.
+- FINISH: end curation; the active clusters are the final result.
+
+An action that cannot be executed changes nothing; the reason is reported
+in your record. The number of turns is limited and the remaining number is
+shown; if it reaches zero before FINISH, the recording is left incomplete.
+
+Return only a JSON object with these fields:
+- "action": one of "INSPECT", "COMPARE", "KEEP", "SPLIT", "MERGE", "DISCARD", "FINISH".
+- "cluster": the cluster ID for INSPECT, KEEP, SPLIT and DISCARD; otherwise null.
+- "source" and "target": cluster IDs for COMPARE and MERGE; otherwise null.
+- "rationale": a brief justification.
+"""
+_CLUSTER_ID = {"anyOf": [{"type": "integer"}, {"type": "null"}]}
+AGENT_SCHEMA = {"type": "object", "properties": {"action": {"type": "string", "enum": list(AGENT_ACTIONS)},
+                "cluster": _CLUSTER_ID, "source": _CLUSTER_ID, "target": _CLUSTER_ID, "rationale": {"type": "string"}},
+                "required": ["action", "cluster", "source", "target", "rationale"], "additionalProperties": False}
+# Same wording as the minimal observation definitions; nothing about which actions are executable.
+AGENT_DEFINITIONS = {
+    "ISI rates": "Fraction of adjacent sorted spike-time intervals shorter than refractory_ms; denominator N-1. null means unavailable.",
+    "sampling_rate_hz": "Samples per second.",
+    "waveform_window_ms": "Waveform window duration in milliseconds.",
+    "waveform_amplitude": "Source units; not assumed to be microvolts.",
+    "amplitude_cv": "Population standard deviation / mean of per-spike peak-to-trough amplitudes.",
+    "n_overclusters": "Number of initial subclusters currently represented.",
+    "correlation": "Pearson correlation of the two mean waveforms.",
+}
+TABLE_KEYS = ("cluster_id", "n_spikes", "n_overclusters", "isi_violation_rate", "amplitude_cv")
+COMPARE_KEYS = {"small_cluster_id": "source_cluster_id", "large_cluster_id": "target_cluster_id",
+                "n_small": "n_source", "n_large": "n_target", "small_isi_rate": "source_isi_rate",
+                "large_isi_rate": "target_isi_rate", "merged_isi_rate": "merged_isi_rate", "correlation": "correlation"}
+IMAGE_LABELS = {"INSPECT": ["waveform overlay", "ISI histogram", "amplitude distribution", "hierarchical aggregation tree"],
+                "COMPARE": ["source waveforms", "target waveforms", "ISI histogram after a hypothetical merge"]}
+
+
+def agent_prompt_sha256():
+    frozen = json.dumps(dict(prompt=AGENT_PROMPT, schema=AGENT_SCHEMA, definitions=AGENT_DEFINITIONS), sort_keys=True)
+    return rb.hashlib.sha256(frozen.encode()).hexdigest()
+
+
+def build_agent_request(text, urls):
+    prefix = "data:image/png;base64,"
+    if len(urls) not in (0, 3, 4) or any(not u.startswith(prefix) for u in urls):
+        raise ValueError("Expected 0, 3 or 4 local PNGs")
+    images = [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": u[len(prefix):]}}
+              for u in urls]
+    return dict(model=MODEL, max_tokens=MAX_TOKENS, system=AGENT_PROMPT, thinking={"type": "adaptive"},
+                output_config={"effort": EFFORT, "format": {"type": "json_schema", "schema": AGENT_SCHEMA}},
+                messages=[{"role": "user", "content": [{"type": "text", "text": text}, *images]}])
+
+
+def agent_decision(raw):
+    answer = answer_from_response(raw)
+    if (not isinstance(answer, dict) or set(answer) != set(AGENT_SCHEMA["required"])
+            or answer["action"] not in AGENT_ACTIONS or not isinstance(answer["rationale"], str)
+            or any(answer[k] is not None and type(answer[k]) is not int for k in ("cluster", "source", "target"))):
+        raise ClaudeStop("Response schema invalid")
+    return answer
+
+
+class AgentController(CurationController):
+    """No scheduler: every observation and operation is the model's choice. Inherits apply/checkpoint/log only."""
+
+    def __init__(self, manager, dataset_id, output_root, *, provider, sampling_rate, turn_limit):
+        require_dataset(dataset_id)
+        if manager.history or type(turn_limit) is not int or turn_limit < 1:
+            raise ValueError("Fresh state and a positive turn limit required")
+        self.manager, self.provider, self.out = manager, provider, Path(output_root)
+        self.out.mkdir(parents=True, exist_ok=False)
+        self.dataset_id, self.fs, self.view, self.turn_limit = dataset_id, sampling_rate, "raw_member_v1", turn_limit
+        self.calls, self.operations, self.charged, self.status = 0, 0, 0., "ready"
+        self.start_cost = provider.charged if provider is not None else 0.
+        self.record, self.shown, self.invalid_streak, self.counts = [], None, 0, Counter()
+        self.input_hash = arrays_hash(manager.overcluster_assigns, manager.spike_times, manager.waveforms)
+        write_json(self.out / "manifest.json", dict(version=AGENT_SCOPE, dataset_id=dataset_id,
+            agent_prompt_sha256=agent_prompt_sha256(), input_sha256=self.input_hash, view=self.view,
+            sampling_rate=sampling_rate, turn_limit=turn_limit, invalid_streak_limit=AGENT_INVALID_STREAK,
+            scheduler=None, skill=None, auto_discard_threshold=0, final_minimum_threshold=0))
+        self.checkpoint("initial")
+
+    def compose(self):
+        """Next turn's request: active-cluster table, own action record, the observation requested last."""
+        m, turn = self.manager, self.calls + 1
+        table = []
+        for cid in m.get_active_clusters():
+            values = observation_metrics(m, "phase1", cid, sampling_rate=self.fs)
+            table.append({k: values[k] for k in TABLE_KEYS})
+        observation, urls, pngs, display = self.shown or (None, [], [], {"images": []})
+        payload = dict(turn=turn, turns_remaining=self.turn_limit - turn + 1,
+                       recording=dict(sampling_rate_hz=float(self.fs), refractory_ms=2.,
+                                      waveform_window_ms=float(m.waveforms.shape[1] / self.fs * 1000)),
+                       active_clusters=table, record=self.record, observation=observation,
+                       definitions=AGENT_DEFINITIONS)
+        return build_agent_request(json.dumps(payload, allow_nan=False), urls), pngs, display
+
+    def step(self):
+        request, pngs, display = self.compose()
+        folder = self.out / f"step_{self.calls + 1:05d}"
+        folder.mkdir()
+        save_request(folder, request, pngs, display)
+        write_json(folder / "request.json", dict(turn=self.calls + 1, display=display,
+                   request_sha256=digest(request), state_sha256=self.state_hash()))
+        self.provider.count(request)
+        self.calls += 1
+        try:
+            raw = self.provider.respond(request)
+        finally:
+            self.charged = self.provider.charged - self.start_cost
+        write_json(folder / "response.json", raw)
+        d = agent_decision(raw)
+        self.log("decision", phase="agent", **d)
+        args = d["cluster"] if d["action"] in SINGLE else f"{d['source']}->{d['target']}" if d["action"] in PAIR else ""
+        print(f"{self.dataset_id} {self.calls} {d['action']} {args} ${self.charged:.4f}", flush=True)
+        return d
+
+    def problem(self, a, c, s, t):
+        """Why an action cannot be executed in the current state, or None."""
+        m = self.manager
+        active = set(m.get_active_clusters())
+        if (c is not None) != (a in SINGLE) or (s is not None) != (a in PAIR) or (t is not None) != (a in PAIR):
+            return "arguments do not match the action"
+        if a in SINGLE and c not in active:
+            return f"cluster {c} is not active"
+        if a in PAIR and (s == t or s not in active or t not in active):
+            return "source and target must be two different active clusters"
+        if a == "SPLIT":
+            merges = np.flatnonzero(m.hierarchy_tree[0] == c)
+            if not len(merges):
+                return f"cluster {c} has no hierarchical merge to undo"
+            child = int(m.hierarchy_tree[1, merges[-1]])
+            if child <= 0 or child in active:
+                return f"the last merge of cluster {c} cannot be undone in the current state"
+        return None
+
+    def act(self, d):
+        """Validate and execute one action; True on FINISH. Non-executable actions change nothing."""
+        a, c, s, t = d["action"], d["cluster"], d["source"], d["target"]
+        args = f" {c}" if a in SINGLE else f" {s} -> {t}" if a in PAIR else ""
+        self.shown = None
+        problem = self.problem(a, c, s, t)
+        if problem:
+            self.invalid_streak += 1
+            self.counts["not_executed"] += 1
+            self.record.append(f"turn {self.calls}: {a}{args}: not executed, {problem}")
+            self.log("not_executed", action=a, cluster=c, source=s, target=t, reason=problem)
+            return False
+        self.invalid_streak = 0
+        self.counts[a] += 1
+        if a == "FINISH":
+            self.record.append(f"turn {self.calls}: FINISH")
+            return True
+        if a == "INSPECT":
+            obs, urls, pngs, display = observe(self.manager, "phase1", c, sampling_rate=self.fs, view=self.view)
+            self.shown = (dict(turn=self.calls, action=a, cluster=c, images=IMAGE_LABELS[a],
+                               measurements={k: obs[k] for k in TABLE_KEYS}), urls, pngs, display)
+            result = "images and measurements returned"
+        elif a == "COMPARE":
+            obs, urls, pngs, display = observe(self.manager, "phase2", s, t, sampling_rate=self.fs, view=self.view)
+            self.shown = (dict(turn=self.calls, action=a, source=s, target=t, images=IMAGE_LABELS[a],
+                               measurements={new: obs[old] for old, new in COMPARE_KEYS.items()}), urls, pngs, display)
+            result = "images and measurements returned"
+        elif a == "KEEP":
+            self.log("kept", cluster=c, state_sha256=self.state_hash())
+            result = "kept"
+        elif a == "SPLIT":
+            first, second = self.apply("SPLIT", c)
+            result = f"done, clusters {first} and {second} are active"
+        elif a == "MERGE":
+            self.apply("MERGE", s, t)
+            result = f"done, cluster {s} merged into {t}"
+        else:
+            self.apply("DISCARD", c)
+            result = f"done, cluster {c} removed"
+        self.record.append(f"turn {self.calls}: {a}{args}: {result}")
+        return False
+
+    def run(self):
+        self.status = "running"
+        try:
+            while self.status == "running":
+                if self.calls >= self.turn_limit:
+                    self.status = "stopped_turn_limit"
+                elif self.act(self.step()):
+                    self.status = "completed"
+                elif self.invalid_streak >= AGENT_INVALID_STREAK:
+                    self.status = "stopped_invalid_streak"
+        except BaseException:
+            self.status = "stopped"
+            raise
+        finally:
+            done = self.status == "completed"
+            self.checkpoint("terminal" if done else "stopped")
+            write_json(self.out / "summary.json", dict(status=self.status, calls=self.calls, turn_limit=self.turn_limit,
+                charged_or_reserved_usd=self.charged, actions=dict(self.counts),
+                not_executed=self.counts["not_executed"], operations=self.operations,
+                n_active_spikes=int(np.count_nonzero(self.manager.assigns)),
+                n_clusters=len(self.manager.get_active_clusters()), final_sha256=self.state_hash(),
+                terminal_evaluation_allowed=done))
+        return self.manager.assigns.copy()
+
+
+def agent_prepare(out):
+    """Offline: freeze prompt/schema/code/environment and render every channel's first request. No API."""
+    rows = rb.selected_rows(DATASETS)
+    out.mkdir(parents=True, exist_ok=False)
+    records = []
+    for row in rows:
+        actor, fs = load_actor(row)
+        c = AgentController(actor, row["dataset_id"], out / "preflight" / row["dataset_id"], provider=None,
+                            sampling_rate=fs, turn_limit=AGENT_TURN_LIMIT)
+        request, pngs, display = c.compose()
+        save_request(c.out, request, pngs, display)
+        records.append(dict(row, initial_clusters=len(actor.get_active_clusters()), n_spikes=len(actor.assigns),
+                            sampling_rate_hz=fs, turn_limit=c.turn_limit, first_request_sha256=digest(request)))
+        print(f"PREFLIGHT {row['dataset_id']}: {records[-1]['initial_clusters']} clusters, "
+              f"turn limit {c.turn_limit}; no API", flush=True)
+        del c, actor
+    manifest = dict(version=AGENT_SCOPE, created_at=accounting.now(), datasets=records,
+        agent_prompt=AGENT_PROMPT, agent_schema=AGENT_SCHEMA, agent_definitions=AGENT_DEFINITIONS,
+        agent_prompt_sha256=agent_prompt_sha256(), code_hashes=sources(), environment=environment(),
+        index_sha256=sha256(INDEX), provider="anthropic-messages", model=MODEL, effort=EFFORT,
+        thinking="adaptive (cannot be disabled on this model)", max_tokens=MAX_TOKENS, retries=0,
+        truncation_retries=TRUNCATION_RETRIES,
+        refusal_fallback="disabled: a fallback model would contaminate the condition; refusal stops",
+        scheduler="none: the model chooses every observation and operation; stateless per-turn requests",
+        turn_input="active-cluster table (phase-1 measurements), the model's own compact action record with results "
+                   "but without rationales or notes, and only the observation requested by the previous action",
+        memory="deliberately limited: earlier judgements are not carried forward, so remembering them is part of "
+               "what is tested (also bounds per-turn input cost); an explicit KEEP is the only action that leaves "
+               "a judgement in the record",
+        keep="KEEP changes no state (no checkpoint, not an operation); it is recorded as 'kept'. Absent from the "
+             "expert reference, whose action records contain only state-changing operations",
+        observation="raw_member_v1 renderer: INSPECT = phase-1 four PNGs, COMPARE = phase-2 three PNGs",
+        executor="ClusterManager through engineering_v1 apply(); checkpoints before and after every operation",
+        non_executable_actions=f"not executed, state unchanged, reason returned in the record; {AGENT_INVALID_STREAK} "
+                               "in a row end the channel as stopped_invalid_streak",
+        turn_limit=AGENT_TURN_LIMIT,
+        turn_limit_rule="same for every channel (a per-channel limit shown to the model would reveal earlier runs' "
+                        "workload); above 2x the most decisions of any v1 rollout",
+        incomplete_channels="turn limit or invalid streak: channel stops, the next channel starts, no formal score",
+        stop_policy="API error, refusal, second truncation, parse, budget or executor failure stops the campaign",
+        not_comparable_with="engineering_v1 minimal rollouts (different scheduling condition)",
+        pricing=PRICES, scoring_sha256=sha256(curation_one_to_one.RULES),
+        evaluation="FINISH terminals only, scored against this run's terminal and registered MAT. Primary: one-to-one "
+                   "(curation_one_to_one, IoU>=0.5, full-output P/R/F1). Supplementary: many-to-one. "
+                   "Exposed development data, not an independent test.")
+    write_json(out / "manifest.json", manifest)
+    write_json(out / "preflight.json", dict(manifest_sha256=sha256(out / "manifest.json"), api_calls=0, status="offline-passed"))
+    return manifest
+
+
+def agent_verify(out):
+    m = accounting.read_json(out / "manifest.json")
+    if m["version"] != AGENT_SCOPE or accounting.read_json(out / "preflight.json")["manifest_sha256"] != sha256(out / "manifest.json"):
+        raise ValueError("Manifest changed")
+    if m["model"] != MODEL or m["max_tokens"] != MAX_TOKENS or m["pricing"] != PRICES:
+        raise ValueError("Run prepared for a different model; pass the same --model")
+    if (m["agent_prompt_sha256"] != agent_prompt_sha256() or m["code_hashes"] != sources()
+            or m["environment"] != environment() or m["turn_limit"] != AGENT_TURN_LIMIT):
+        raise ValueError("Frozen prompt/code/dependencies changed")
+    if m["index_sha256"] != sha256(INDEX) or m["scoring_sha256"] != sha256(curation_one_to_one.RULES):
+        raise ValueError("Dataset index or scoring rules changed")
+    rows = rb.selected_rows([r["dataset_id"] for r in m["datasets"]])
+    if any(any(r[k] != saved[k] for k in r) for r, saved in zip(rows, m["datasets"])):
+        raise ValueError("Dataset changed")
+    return m
+
+
+def agent_prepare_resume(source, out):
+    """Offline: a new run that carries over the source's finished channels unchanged and replays its
+    unfinished channel from saved responses (not billed again). The model-visible condition must be identical."""
+    import shutil
+    source = source.resolve()
+    sm = accounting.read_json(source / "manifest.json")
+    status = accounting.read_json(source / "execution_status.json")
+    if sm["version"] != AGENT_SCOPE or status["status"] == "completed":
+        raise ValueError("Source is not a stopped run of this agent condition and model")
+    m = agent_prepare(out)
+    frozen = ("agent_prompt_sha256", "agent_schema", "agent_definitions", "environment", "model", "effort",
+              "max_tokens", "pricing", "turn_limit", "index_sha256", "scoring_sha256", "datasets")
+    if any(m[k] != sm[k] for k in frozen):
+        raise ValueError("Model-visible condition differs from the source run; resume refused")
+    carried, unfinished = {}, []
+    for row in sm["datasets"]:
+        folder = source / "datasets" / row["dataset_id"]
+        if (folder / "summary.json").exists() and accounting.read_json(folder / "summary.json")["status"] == "completed":
+            shutil.copytree(folder, out / "datasets" / row["dataset_id"])
+            carried[row["dataset_id"]] = sha256(folder / "summary.json")
+        else:
+            unfinished.append(row["dataset_id"])
+    ledger = [e for e in accounting.read_jsonl(source / "provider_ledger.jsonl") if e.get("dataset_id") in unfinished]
+    calls = {e["call"] for e in ledger if "call" in e}
+    responses = {int(p.stem): accounting.read_json(p) for p in (source / "responses").glob("*.json") if int(p.stem) in calls}
+    plan = plan_replay(ledger, responses, accept=agent_decision)
+    changed = {k: [sm["code_hashes"].get(k), m["code_hashes"].get(k)]
+               for k in sorted(set(sm["code_hashes"]) | set(m["code_hashes"]))
+               if sm["code_hashes"].get(k) != m["code_hashes"].get(k)}
+    info = dict(created_at=accounting.now(), source=str(source), source_manifest_sha256=sha256(source / "manifest.json"),
+                source_status=status["status"], source_stop_kind=status.get("stop_kind"), code_changes=changed,
+                carried_over=carried, unfinished=unfinished, replay_calls=len(plan),
+                replay=[dict(source_call=e["source_call"], request_sha256=e["request_sha256"], input_tokens=e["input_tokens"],
+                             response_sha256=sha256(source / "responses" / f"{e['source_call']:06d}.json")) for e in plan],
+                inherited=dict(conservative_usd=status["conservative_charged_or_reserved_usd"],
+                               standard_usd=status["standard_estimate_known_responses_usd"], tokens=status.get("tokens") or {}),
+                note="Carried-over channels are copied unchanged. Replayed responses are not billed again and every replayed "
+                     "request must be byte-identical to the source's. The new budget is cumulative.")
+    write_json(out / "resume_source.json", info)
+    print(f"RESUME PREPARED from {source.name}: carried over {len(carried)} channels; {len(plan)} calls of "
+          f"{', '.join(unfinished)} replayed locally; inherited conservative ${info['inherited']['conservative_usd']:.4f}; no API")
+    return info
+
+
+def load_agent_replay(out):
+    info = accounting.read_json(out / "resume_source.json")
+    source = Path(info["source"])
+    if sha256(source / "manifest.json") != info["source_manifest_sha256"]:
+        raise ValueError("Source manifest changed")
+    for dataset, h in info["carried_over"].items():
+        if sha256(out / "datasets" / dataset / "summary.json") != h:
+            raise ValueError("Carried-over channel changed")
+    entries = []
+    for r in info["replay"]:
+        path = source / "responses" / f"{r['source_call']:06d}.json"
+        if sha256(path) != r["response_sha256"]:
+            raise ValueError("Saved source response changed")
+        entries.append(dict(r, raw=accounting.read_json(path)))
+    return info, entries
+
+
+def agent_execute(out, budget, *, resume=False):
+    m = agent_verify(out)
+    authorize(out, budget, AGENT_SCOPE)
+    if resume != (out / "resume_source.json").exists():
+        raise ValueError("--resume must be used exactly for directories made by --prepare-resume-from")
+    info, replay = load_agent_replay(out) if resume else (None, [])
+    inherited = info["inherited"] if info else None
+    if inherited and budget <= inherited["conservative_usd"]:
+        raise ValueError("Cumulative budget must exceed what the source run already used")
+    write_json(out / "execution_started.json", dict(at=accounting.now(), budget_usd=budget,
+               manifest_sha256=sha256(out / "manifest.json"), authorization_sha256=sha256(out / "authorize_execute.json"),
+               resume_source=info["source"] if info else None, replay_calls=len(replay)))
+    (out / "responses").mkdir()
+    provider, channels, status, error = None, {}, "stopped", None
+    started = monotonic()
+    try:
+        provider = ClaudeProvider(LazyClient(), out, budget, replay=replay, inherited=inherited)
+        provider.expected_first = {r["dataset_id"]: r["first_request_sha256"] for r in m["datasets"]}
+        for row in m["datasets"]:
+            agent_verify(out)
+            if info and row["dataset_id"] in info["carried_over"]:
+                channels[row["dataset_id"]] = "completed (carried over)"
+                continue
+            actor, fs = load_actor(row)
+            provider.dataset = row["dataset_id"]
+            c = AgentController(actor, row["dataset_id"], out / "datasets" / row["dataset_id"], provider=provider,
+                                sampling_rate=fs, turn_limit=row["turn_limit"])
+            c.run()
+            channels[row["dataset_id"]] = c.status
+            print(f"CHANNEL {row['dataset_id']} {c.status} after {c.calls} turns; campaign ${provider.charged:.6f}", flush=True)
+            del c, actor
+        if provider.replay:
+            raise ClaudeStop("Unconsumed replay: the resumed trajectory did not reach the source's last decision")
+        status = "completed"
+    except BaseException as exc:
+        error = dict(type=type(exc).__name__, cause=type(exc.__cause__).__name__ if exc.__cause__ else None,
+                     message=str(exc)[:200] if isinstance(exc, (ClaudeStop, ControllerStop, ValueError)) else None)
+        raise
+    finally:
+        p = provider
+        write_json(out / "execution_status.json", dict(status=status, error=error, stop_kind=p.stop_kind if p else None,
+                   channels=channels, inference_calls=p.calls if p else 0, live_calls=p.live_calls if p else 0,
+                   replayed_calls=p.replayed if p else 0, unconsumed_replay=len(p.replay) if p else 0,
+                   inherited_from_source=inherited,
+                   truncations=dict(count=len(p.truncations), retried=sum(t["retried"] for t in p.truncations),
+                                    stopped_after_retry=sum(not t["retried"] for t in p.truncations),
+                                    events=p.truncations) if p else None,
+                   tokens=p.tokens if p else {}, conservative_charged_or_reserved_usd=p.charged if p else 0,
+                   standard_estimate_known_responses_usd=p.standard if p else 0,
+                   seconds=monotonic() - started, at=accounting.now()))
+        agent_collect(out)
+
+
+def agent_collect(out):
+    """Score only channels that ended with FINISH; incomplete channels get no terminal score."""
+    from score_terminal_matching import report_lines
+    m = agent_verify(out)
+    status = accounting.read_json(out / "execution_status.json")
+    results = []
+    for row in m["datasets"]:
+        folder = out / "datasets" / row["dataset_id"]
+        r = dict(dataset_id=row["dataset_id"], status="not-started", final_metrics=None)
+        if (folder / "summary.json").exists():
+            r.update(accounting.read_json(folder / "summary.json"))
+            if r["status"] == "completed" and r["terminal_evaluation_allowed"]:
+                score_terminal(folder, row, r)
+        results.append(r)
+    dest = BASE / "results" / out.name
+    dest.mkdir(parents=True, exist_ok=False)
+    write_json(out / "score.json", dict(status=status, datasets=results, manifest_sha256=sha256(out / "manifest.json")))
+    complete = [r for r in results if r.get("one_to_one")]
+    lines = [f"# Agentic-free v1 rollout — {MODEL}", "",
+             f"Run: `{out.name}`; campaign status: **{status['status']}**.", "",
+             "No scheduler: the model chose every INSPECT / COMPARE / KEEP / SPLIT / MERGE / DISCARD / FINISH. Renderer, executor and "
+             "scoring are those of the engineering_v1 minimal rollouts, but this is a different condition: report it "
+             "separately. No skill, examples, expert information or refusal fallback. Exposed development channels.",
+             f"Manifest SHA256: `{sha256(out / 'manifest.json')}`.",
+             f"Calls: {status['inference_calls']}; known standard estimate: ${status['standard_estimate_known_responses_usd']:.6f}; "
+             f"conservative usage/reservations: ${status['conservative_charged_or_reserved_usd']:.6f}."]
+    if status.get("inherited_from_source"):
+        info = accounting.read_json(out / "resume_source.json")
+        lines.append(f"Resumed from `{Path(info['source']).name}` (stopped: {info['source_stop_kind']}): "
+                     f"{', '.join(info['carried_over'])} carried over unchanged; {info['replay_calls']} calls of "
+                     f"{', '.join(info['unfinished'])} replayed byte-identically without billing ({status.get('replayed_calls', 0)} "
+                     f"consumed). Costs above are cumulative including the source run; calls are this run's (replayed + live). "
+                     f"A resumed channel's own summary counts only its new live cost.")
+    lines += ["", "| Dataset | Status | Turns / limit | Actions | Not executed |", "|---|---|---:|---|---:|"]
+    for r in results:
+        actions = ", ".join(f"{k} {v}" for k, v in sorted((r.get("actions") or {}).items()) if k != "not_executed")
+        lines.append(f"| {r['dataset_id']} | {r['status']} | {r.get('calls', 0)} / {r.get('turn_limit', '—')} | "
+                     f"{actions or '—'} | {r.get('not_executed', 0)} |")
+    lines += [""] + (report_lines("Terminal scores (FINISH only)", complete)[3:] if complete
+                     else ["No channel reached FINISH; nothing is scored."])
+    lines += ["", "Incomplete channels are not final scores. No automatic retry or prompt update.",
+              f"Stop/error: `{status['error']}`. Local records: `../../runs/{out.name}/`."]
+    with (dest / "REPORT.md").open("x") as f:
+        f.write("\n".join(lines) + "\n")
+    return results
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--output-root", required=True)
@@ -779,15 +1284,33 @@ def main():
     p.add_argument("--resume", action="store_true", help="with --execute, for a directory made by --prepare-resume-from")
     p.add_argument("--pilot-stepwise", type=int, help="with --execute: stop after N stepwise requests (resumable)")
     p.add_argument("--budget-usd", type=float)
+    p.add_argument("--agent", action="store_true", help="agentic-free v1 rollout (no scheduler); offline prepare or --execute")
+    p.add_argument("--model", choices=sorted(MODEL_SETTINGS), default="claude-opus-5-5",
+                   help="with --agent only; prepare and execute must use the same model")
     args = p.parse_args()
     out = rb.output_path(args.output_root)
+    if args.model != "claude-opus-5-5" and not args.agent:
+        raise ValueError("--model applies only to --agent runs")
+    use_model(args.model)
     if (args.resume or args.pilot_stepwise is not None) and not args.execute:
         raise ValueError("--resume / --pilot-stepwise only apply to --execute")
+    if args.agent and (args.estimate or args.pilot_stepwise is not None):
+        raise ValueError("--agent supports offline preparation, --prepare-resume-from and --execute [--resume]")
     if args.execute:
         def stop(signum, frame):
             raise KeyboardInterrupt("Explicit process stop")
         signal.signal(signal.SIGTERM, stop)
-        execute(out, args.budget_usd, resume=args.resume, pilot_stepwise=args.pilot_stepwise)
+        if args.agent:
+            agent_execute(out, args.budget_usd, resume=args.resume)
+        else:
+            execute(out, args.budget_usd, resume=args.resume, pilot_stepwise=args.pilot_stepwise)
+    elif args.agent and args.prepare_resume_from:
+        agent_prepare_resume(rb.output_path(args.prepare_resume_from), out)
+    elif args.agent:
+        if args.budget_usd is not None:
+            raise ValueError("Dry run needs no budget")
+        agent_prepare(out)
+        print(f"OFFLINE PASSED; manifest {sha256(out / 'manifest.json')}")
     elif args.estimate:
         estimate(out)
     elif args.prepare_resume_from:

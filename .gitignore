@@ -13,6 +13,44 @@ wheels/
 # Virtual environments
 .venv
 .venv-interface/
+.venv-firebase/
+.venv-model-tools/
+.venv-vllm/
+
+# Firebase CLI state and authentication/debug output stay local.
+.firebase/
+firebase-debug.log*
+firestore-debug.log*
+ui-debug.log*
+
+# Private backups, credentials, and machine-local editor settings.
+spike-sorting-private-backup-*/
+credentials/
+secrets/
+private/
+.aws/
+.ssh/
+.git-credentials
+.vscode/
+*.pem
+*.key
+*.p12
+*.pfx
+*.token
+id_rsa
+id_ed25519
+*_ed25519
+application_default_credentials.json
+*service-account*.json
+*service_account*.json
+
+# Review databases and runtime logs stay local, including outside output/.
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+*.log
 
 data/
 *.mat
@@ -53,6 +91,7 @@ Jacob Bedke-Annotated_spike_sorting_data_w_chronux/
 
 # Personal career material; keep outside the project repository
 /Resume/
+/*_Resume_*.docx
 简历项目素材.md
 项目技能总结.md
 *简历*

@@ -1,0 +1,81 @@
+/* Draft layout for the 2026-10-26 redesign: cluster thumbnails, one workspace, metrics on demand,
+   AI decision and human decision. Deliberately minimal; no navigation rail, queue list or tabs. */
+:root {
+  --bg: #f4f6f8; --panel: #fff; --line: #d6dde4; --text: #1d2a35; --muted: #5b6b7a;
+  --blue: #2c639e; --red: #b7362c; --green: #1f7a4d; --amber: #a05c19;
+  --blue-soft: #e4eef9; --red-soft: #fbe7e4;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+button { font: inherit; padding: 6px 12px; border: 1px solid var(--line); border-radius: 6px; background: #fff; cursor: pointer; }
+button:disabled { opacity: .45; cursor: default; }
+button.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+button.selected { outline: 2px solid var(--blue); }
+select, input { font: inherit; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+h2 { font-size: 15px; margin: 0; }
+.count { font-weight: normal; color: var(--muted); }
+.hint { color: var(--muted); font-size: 12px; }
+.empty { color: var(--muted); padding: 24px; text-align: center; }
+
+.top { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.product span { color: var(--muted); margin-left: 8px; }
+.top-controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.top-controls label { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 13px; }
+.notice { margin: 0; padding: 6px 16px; font-size: 13px; color: var(--muted); }
+.notice.error { color: var(--red); }
+
+.layout {
+  display: grid; gap: 12px; padding: 0 16px 16px;
+  grid-template-columns: 2fr 1fr;
+  grid-template-areas: "cards cards" "workspace metrics" "ai human";
+}
+.cards-section { grid-area: cards; } .workspace { grid-area: workspace; } .metrics { grid-area: metrics; }
+.ai-panel { grid-area: ai; } .human-panel { grid-area: human; }
+.layout > section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; min-width: 0; }
+.section-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
+
+/* Thumbnail grid: four columns, two rows visible, scroll for the rest. */
+.cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; max-height: 390px; overflow-y: auto; padding: 2px; }
+.card { border: 2px solid var(--line); border-radius: 8px; padding: 6px; cursor: pointer; background: #fff; position: relative; }
+.card:hover { border-color: #9fb3c6; }
+.card.primary { border-color: var(--blue); background: var(--blue-soft); }
+.card.secondary { border-color: var(--red); background: var(--red-soft); }
+.card.ai-involved { box-shadow: 0 0 0 3px var(--red); }
+.card svg { width: 100%; height: 110px; display: block; }
+.card .meta { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; margin-top: 4px; gap: 6px; }
+.card .meta strong { font-size: 13px; }
+.card .chips { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+.chip { font-size: 11px; padding: 1px 6px; border-radius: 10px; background: #eef2f5; color: var(--muted); }
+.chip.kept { background: #e2f3ea; color: var(--green); }
+.chip.ai { background: var(--red-soft); color: var(--red); }
+
+.workspace-plot svg { width: 100%; height: auto; display: block; }
+.plot-key { display: flex; gap: 14px; font-size: 12px; margin: 4px 0; }
+.plot-key .blue::before, .plot-key .red::before, .plot-key .green::before, .plot-key .amber::before { content: ""; display: inline-block; width: 14px; height: 3px; margin-right: 5px; vertical-align: middle; }
+.plot-key .blue::before { background: var(--blue); } .plot-key .red::before { background: var(--red); }
+.plot-key .green::before { background: var(--green); } .plot-key .amber::before { background: var(--amber); }
+
+.metric-block { border-top: 1px solid var(--line); padding-top: 8px; margin-top: 8px; }
+.metric-block:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
+.metric-block h3 { font-size: 13px; margin: 0 0 4px; }
+.metric-block h3.blue { color: var(--blue); } .metric-block h3.red { color: var(--red); }
+.metric-block table { font-size: 12px; border-collapse: collapse; width: 100%; }
+.metric-block td { padding: 1px 4px; } .metric-block td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+.metric-block svg { width: 100%; height: auto; display: block; margin-top: 4px; }
+
+.ai-card { border: 1px solid var(--line); border-radius: 6px; padding: 8px; margin-bottom: 6px; cursor: pointer; }
+.ai-card:hover { border-color: var(--red); }
+.ai-card.current { border-color: var(--red); background: var(--red-soft); }
+.ai-card .action { font-weight: 600; color: var(--red); }
+.ai-card .rationale { font-size: 12px; color: var(--muted); margin-top: 3px; }
+
+.actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.human-panel label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); margin: 6px 0; }
+.human-panel #reason-new { width: 100%; margin-bottom: 6px; }
+.preview-note { background: #fff8e6; border: 1px solid #efd9a3; border-radius: 6px; padding: 6px 8px; font-size: 12px; margin-bottom: 6px; }
+.confirm-row { display: flex; gap: 8px; margin-top: 4px; }
+
+@media (max-width: 1100px) {
+  .layout { grid-template-columns: 1fr; grid-template-areas: "cards" "workspace" "metrics" "ai" "human"; }
+  .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

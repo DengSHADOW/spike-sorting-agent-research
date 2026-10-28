@@ -16,8 +16,10 @@ import threading
 import time
 import uuid
 
-ROOT = Path(__file__).resolve().parents[3]
-ALLOWED = ("cM2-e004_004-006_CH31", "cM2-e004_004-006_CH3", "cM2-e004_011-015_CH20", "cM2-e008_021-028_CH30")
+ROOT = Path(os.environ.get("SPIKE_REVIEW_DATA_ROOT", Path(__file__).resolve().parents[3])).resolve()
+# CH17 was explicitly authorized for interface-only manual review on 2026-10-26.
+# Experiment scopes and reserved recording blocks remain unchanged.
+ALLOWED = ("cM2-e004_004-006_CH31", "cM2-e004_004-006_CH3", "cM2-e004_011-015_CH20", "cM2-e008_021-028_CH30", "cM2-e004_011-015_CH17")
 MAX_UPLOAD = 256 * 1024 * 1024
 
 
@@ -89,9 +91,14 @@ class DatasetManager:
 
     def summaries(self):
         with self.lock:
+            entries=list(self.bundles.items())
+            if any(b.get("study_id") for _,b in entries):
+                entries=[(k,b) for k,b in entries if b.get("study_id") and b.get("study_agent_id") in ("Agent_1","Agent_2") or b["source_kind"]=="initial"]
+                entries.sort(key=lambda item:(not bool(item[1].get("study_id")),item[1].get("study_agent_id","")))
             return [dict(id=k,dataset_id=b["dataset_id"],source_kind=b["source_kind"],run_status=b["run_status"],
                 cases=len(b["cases"]),n_spikes=b["n_spikes"],sampling_rate_hz=b["sampling_rate_hz"],
-                mat_path=b["provenance"].get("mat_path"),mat_sha256=b["provenance"].get("mat_sha256")) for k,b in self.bundles.items()]
+                study_id=b.get("study_id"),study_agent_id=b.get("study_agent_id"),optional_reference=b.get("optional_reference",False),
+                mat_path=b["provenance"].get("mat_path"),mat_sha256=b["provenance"].get("mat_sha256")) for k,b in entries]
 
     def get(self, bundle_id=None):
         with self.lock:
@@ -124,14 +131,15 @@ class DatasetManager:
         result=[]
         for dataset,row in approved_rows().items():
             path=ROOT / row["mat_path"]
-            sources=["initial"]+(["saved"] if dataset in ALLOWED[:2] else [])
+            study_active=any(b.get("study_id") for b in self.bundles.values())
+            sources=["initial"]+(["saved"] if dataset in ALLOWED[:2] and not study_active else [])
             result.append(dict(dataset_id=dataset,filename=path.name,mat_path=row["mat_path"],n_spikes=row["n_spikes"],
                 bytes=row["file_size_bytes"],sha256=row["mat_sha256"],server_available=path.is_file(),sources=sources))
         return result
 
     def receive_upload(self, stream, dataset, filename, length):
         if dataset not in ALLOWED:
-            raise ValueError("Only the four approved development channels can be uploaded")
+            raise ValueError("Only approved review channels can be uploaded")
         if not isinstance(filename,str) or not re.fullmatch(r"[^/\\\x00-\x1f]{1,200}\.mat",filename,re.I):
             raise ValueError("Choose a MAT filename without directory components")
         row=approved_rows()[dataset]

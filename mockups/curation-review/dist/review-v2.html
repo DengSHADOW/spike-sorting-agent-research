@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="curation-mode" content="local">
+<title>SpikeAgent review v2 — draft</title>
+<link rel="stylesheet" href="review-v2.css">
+</head>
+<body>
+<header class="top">
+  <div class="product"><strong>SpikeAgent</strong><span>review v2 · draft layout from the 2026-10-26 meeting</span></div>
+  <div class="top-controls">
+    <label>Dataset <select id="dataset"></select></label>
+    <label>Reviewer <input id="reviewer" maxlength="60" placeholder="your name"></label>
+    <label class="toggle"><input type="checkbox" id="shared-scale" checked> Shared amplitude scale</label>
+    <button id="undo" disabled>Undo</button>
+    <button id="export" disabled>Export sorting result</button>
+  </div>
+</header>
+<p id="notice" class="notice" role="status">Loading datasets…</p>
+
+<main class="layout">
+  <section class="cards-section">
+    <div class="section-head">
+      <h2>Clusters <span id="cluster-count" class="count">0</span></h2>
+      <span class="hint">Sorted by spike count, then ISI violation rate. Click = select (blue). Shift+click = compare (red). Every stored member waveform is drawn; counts are current memberships.</span>
+    </div>
+    <div id="cards" class="cards"></div>
+  </section>
+
+  <section class="workspace">
+    <div class="section-head"><h2 id="workspace-title">Workspace</h2><span id="workspace-sub" class="hint">Select a cluster to inspect it. Shift+click a second one to overlay.</span></div>
+    <div id="workspace-plot" class="workspace-plot"><div class="empty">No cluster selected.</div></div>
+  </section>
+
+  <section class="metrics">
+    <div class="section-head"><h2>Metrics</h2><span class="hint">Shown on demand for the selected cluster(s).</span></div>
+    <div id="metrics-body"></div>
+  </section>
+
+  <section class="ai-panel">
+    <div class="section-head"><h2>AI decision</h2><span class="hint">Stored suggestions for the current state. Involved clusters are outlined in red above.</span></div>
+    <div id="ai-body"><div class="empty">No cluster selected.</div></div>
+  </section>
+
+  <section class="human-panel">
+    <div class="section-head"><h2>Your decision</h2><span id="human-context" class="hint">Select one cluster, or two to compare.</span></div>
+    <div id="actions" class="actions"></div>
+    <div id="preview-note" class="preview-note" hidden></div>
+    <label>Reason
+      <select id="reason"></select>
+    </label>
+    <input id="reason-new" placeholder="Type a new reason… it will be added to the list" maxlength="300" hidden>
+    <div class="confirm-row">
+      <button id="confirm" class="primary" disabled>Confirm</button>
+      <button id="reject" disabled>Reject / clear</button>
+    </div>
+    <p id="last-action" class="hint"></p>
+  </section>
+</main>
+
+<script src="curation-core.js"></script>
+<script src="review-v2.js"></script>
+</body>
+</html>

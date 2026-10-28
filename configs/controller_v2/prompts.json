@@ -1,0 +1,34 @@
+{
+  "note": "Controller v2 prompts. Wording is the frozen minimal prompt (zero-shot baseline/prompts/phase1.txt, phase2.txt) with the action list built from the actions actually offered; nothing about scheduling or phases.",
+  "single": {
+    "preamble": "You are curating extracellular spike clusters. The goal is to obtain\nclusters corresponding to individual neurons and exclude noise.\n\nAssess the current cluster using the supplied images and numerical\nmeasurements. Images are ordered as: waveform overlay, ISI histogram,\namplitude distribution, and hierarchical aggregation tree.\nTree: leaves are initial subclusters; branches show their merge history.\n\nChoose one action:",
+    "actions": {
+      "KEEP": "retain the current cluster.",
+      "SPLIT": "undo the last hierarchical merge; assess both children next.",
+      "DISCARD": "remove the current cluster from the active sorting."
+    }
+  },
+  "pair": {
+    "preamble": "You are curating extracellular spike clusters. The goal is to obtain\nclusters corresponding to individual neurons and exclude noise.\n\nAssess the supplied source and target clusters using the images and\nnumerical measurements. Images are ordered as: source waveforms,\ntarget waveforms, and the ISI histogram after a hypothetical merge.\n\nChoose one action:",
+    "actions": {
+      "MERGE": "combine the source and target as one neuron.",
+      "NOT_MERGE": "reject this pair without deleting the source.",
+      "DISCARD": "remove the source because it is noise, not merely because\n  it differs from the target."
+    }
+  },
+  "definitions": {
+    "common": {
+      "ISI rates": "Fraction of adjacent sorted spike-time intervals shorter than refractory_ms; denominator N-1. null means unavailable.",
+      "sampling_rate_hz": "Samples per second.",
+      "waveform_window_ms": "Waveform window duration in milliseconds.",
+      "waveform_amplitude": "Source units; not assumed to be microvolts."
+    },
+    "single": {
+      "amplitude_cv": "Population standard deviation / mean of per-spike peak-to-trough amplitudes.",
+      "n_overclusters": "Number of initial subclusters currently represented."
+    },
+    "pair": {
+      "correlation": "Pearson correlation of the two mean waveforms."
+    }
+  }
+}

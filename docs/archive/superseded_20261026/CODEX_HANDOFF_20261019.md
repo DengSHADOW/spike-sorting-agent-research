@@ -1,5 +1,17 @@
 # 新 Codex 接手说明：Runpod 上的 Qwen9B 与 harness
 
+> **2026-10-26 部署更新，优先于下文旧的 9B 范围：** 用户明确改为使用
+> `Qwen/Qwen3.5-27B` 和 `google/gemma-4-E4B-it`，并授权删除本地 9B、下载和
+> 准备部署两个新模型；当前是 CPU，暂不使用模型。9B 缓存及其独有共享 blob
+> 已删除，历史实验结果保留。两个新模型的固定 revision BF16 权重已下载，
+> 全部官方文件校验通过。独立 `.venv-vllm` 已安装 vLLM 0.32.0 / PyTorch
+> 2.13.0（CUDA 13.0 build），198 项依赖一致性检查通过；两个模型的 config
+> 和 processor 已在离线模式加载验证，**没有加载权重、启动推理或运行实验**。
+> 切换 GPU 后仍需检查驱动兼容性与真实加载。见
+> [部署说明](docs/LOCAL_MODEL_DEPLOYMENT.md)、`configs/local_models.json`、
+> `scripts/deploy/local_models.py` 和 `output/local_model_setup_20261026/`。
+> 旧 minimal/harness 的 OpenRouter transport 尚未迁移，本次没有改实验协议。
+
 更新：2026-10-19。本文是给开发助手的交接 prompt，**不是发送给实验模型的 system prompt 或 skill**。先读本文、核对实际文件，再工作；不要仅凭旧聊天或文档标题判断任务已完成。
 
 ## 1. 用户现在要做什么

@@ -89,10 +89,20 @@ class AnalysisService:
             self.input_dataset, self.inputs = dataset, inputs
         return self.inputs
 
-    def _assignments(self, case, bundle, inputs):
+    def _assignments(self, case, bundle, inputs, return_tree=False):
         dataset = case["dataset_id"]
         if case.get("review_mode") == "manual":
             assigns, tree = inputs[4], inputs[5]
+        elif case.get("study_id"):
+            _,_,root=self.datasets.find_case(case["id"])
+            row=bundle.get("study_checkpoints",{}).get(case["state_sha256"])
+            if not row or Path(row["file"]).name!=row["file"]:
+                raise ValueError("Unknown matched-study checkpoint")
+            path=root/"states"/row["file"]
+            if (not path.resolve().is_relative_to(root.resolve()) or sha256(path)!=row["sha256"]
+                    or row["sha256"]!=case["checkpoint_sha256"]):
+                raise ValueError("Matched-study checkpoint integrity mismatch")
+            with np.load(path,allow_pickle=False) as saved:assigns,tree=saved["assigns"],saved["tree"]
         else:
             if dataset not in (DATASETS[0], DATASETS[1]):
                 raise ValueError("No approved saved checkpoints for this dataset")
@@ -116,7 +126,35 @@ class AnalysisService:
                 assigns, tree = saved["assigns"], saved["tree"]
         if assigns.shape != inputs[1].shape or arrays_hash(assigns, tree) != case["state_sha256"]:
             raise ValueError("Checkpoint state hash/alignment mismatch")
-        return assigns
+        return (assigns, tree) if return_tree else assigns
+
+    def correlograms(self, case_id, cluster_id=None, target_id=None):
+        from review_correlograms import CorrelogramCache
+        case, bundle, _ = self.datasets.find_case(case_id)
+        units = {u['id']: u for u in case['units']}
+        source_id = cluster_id or case['source']
+        if case['dataset_id'] not in DATASETS or source_id not in units or (target_id is not None and (target_id not in units or target_id == source_id or source_id != case['source'])):
+            raise ValueError('Choose active clusters in this exact dataset/state')
+        with self.lock:
+            if not hasattr(self, 'correlation_cache'):
+                self.correlation_cache = CorrelogramCache()
+            inputs = self._inputs(case, bundle)
+            assigns = self._assignments(case, bundle, inputs)
+            chosen = [source_id] + ([target_id] if target_id else [])
+            times = []
+            acg = []
+            for uid in chosen:
+                u = units[uid]
+                t = inputs[1][assigns == u['cluster_id']]
+                if len(t) != u['spikes'] or not len(t):
+                    raise ValueError('Correlogram membership mismatch')
+                times.append(t)
+                acg.append(dict(self.correlation_cache.get(t), source=u['cluster_id'], target=u['cluster_id']))
+            return dict(schema='review-correlograms-v1', case_id=case_id, dataset_id=case['dataset_id'],
+                state_sha256=case['state_sha256'], mat_sha256=case['mat_sha256'],
+                source_cluster=units[source_id]['cluster_id'], target_cluster=units[target_id]['cluster_id'] if target_id else None,
+                acg=acg, ccg=dict(self.correlation_cache.get(*times), source=units[source_id]['cluster_id'], target=units[target_id]['cluster_id']) if target_id else None,
+                new_model_calls=0, execution_status='not_executed')
 
     def get(self, case_id, cluster_id=None, target_id=None):
         case, bundle, _ = self.datasets.find_case(case_id)

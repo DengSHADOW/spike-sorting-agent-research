@@ -1,13 +1,19 @@
 # Script Entry Points
 
+## Local model download and deployment
+
+`deploy/local_models.py` downloads and verifies pinned Qwen3.5-27B and
+Gemma-4-E4B-it snapshots without inference. Its separate `serve` command starts
+one verified model on a GPU. See [deployment instructions](../docs/LOCAL_MODEL_DEPLOYMENT.md).
+
 ## Current real-data priority
 
 Calibrate a domain skill on development data, then freeze the prompt, controller,
 observations and evaluator for a closed-model autonomous rollout baseline.
 The independent system/skill request builder and candidate skill v1 are ready
 for offline checks, not integrated into live runners or model-validated. See
-[implementation plan](../项目流程与实施计划_20261006.md) and
-[method and experiment status](../项目方法与实验状态.md).
+[project document](../项目总文档.md) and
+[methods and results](../项目总文档.md#5-实验结果).
 
 - `analysis/prepare_curation_skill.py`: development-only offline case preparation;
   reuses saved PNGs/states and records hashes, separates audit targets from actor

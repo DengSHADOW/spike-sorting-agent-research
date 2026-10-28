@@ -88,6 +88,35 @@ class MeasurementsTests(unittest.TestCase):
             case["dataset_id"]="cM2-e007_012-017_CH1"
             with self.assertRaises(ValueError):service.get("fixture")
 
+    def test_correlograms_use_exact_membership_and_validate_scope_before_io(self):
+        case, service, inputs, assigns = self.fixture()
+        before = [item.copy() for item in inputs[1:]]
+        with patch.object(service, '_inputs', return_value=inputs), patch.object(service, '_assignments', return_value=assigns):
+            value = service.correlograms('fixture', target_id='U-002')
+            self.assertEqual([row['n_source'] for row in value['acg']], [2, 2])
+            self.assertEqual([sum(row['counts']) for row in value['acg']], [2, 2])
+            self.assertEqual(sum(value['ccg']['counts']), 4)
+            self.assertFalse(value['ccg']['self_pairs_excluded'])
+            self.assertEqual(value['execution_status'], 'not_executed')
+        for old, new in zip(before, inputs[1:]):
+            np.testing.assert_array_equal(old, new)
+        with patch.object(service, '_inputs', side_effect=AssertionError('must reject before input IO')):
+            for cluster, target in [('U-001', 'U-001'), ('U-002', 'U-003'), ('U-999', None)]:
+                with self.assertRaises(ValueError):
+                    service.correlograms('fixture', cluster, target)
+            case['dataset_id'] = 'unapproved-recording'
+            with self.assertRaises(ValueError):
+                service.correlograms('fixture')
+
+    def test_private_snapshot_export_can_request_verified_tree_without_changing_inputs(self):
+        case, service, inputs, assigns = self.fixture()
+        case['review_mode'] = 'manual'
+        case['state_sha256'] = analysis.arrays_hash(assigns, inputs[5])
+        result, tree = service._assignments(case, {}, inputs, return_tree=True)
+        np.testing.assert_array_equal(result, assigns)
+        np.testing.assert_array_equal(tree, inputs[5])
+        self.assertIsInstance(service._assignments(case, {}, inputs), np.ndarray)
+
     def test_initial_state_hash_rejects_tampered_assignments(self):
         case,service,inputs,assigns=self.fixture()
         case["review_mode"]="manual"

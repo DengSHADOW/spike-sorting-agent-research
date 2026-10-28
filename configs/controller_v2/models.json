@@ -1,0 +1,41 @@
+{
+  "note": "Model profiles for controller v2 on local vLLM. Weights, revisions and serving settings come from configs/local_models.json; sampling and thinking settings from each model's README / generation_config.json in the HF cache (checked 2026-10-27). Thinking is enabled for both so the two models are run in the same mode.",
+  "deployment_config": "configs/local_models.json",
+  "models": {
+    "qwen27b": {
+      "repo_id": "Qwen/Qwen3.5-27B",
+      "revision": "fc05daec18b0a78c049392ed2e771dde82bdf654",
+      "dtype": "bfloat16",
+      "served_name": "Qwen/Qwen3.5-27B",
+      "max_tokens": 8000,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "min_p": 0.0,
+        "presence_penalty": 1.5,
+        "repetition_penalty": 1.0
+      },
+      "chat_template_kwargs": {
+        "enable_thinking": true
+      },
+      "source": "README 'Thinking mode for general tasks'; thinking is the template default; same sampling as the 2026-10-13 Qwen3.5-27B runs"
+    },
+    "gemma4": {
+      "repo_id": "google/gemma-4-E4B-it",
+      "revision": "ee0ef6023621cff504d758262d4e04895a5af4a2",
+      "dtype": "bfloat16",
+      "served_name": "google/gemma-4-E4B-it",
+      "max_tokens": 8000,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 64
+      },
+      "chat_template_kwargs": {
+        "enable_thinking": true
+      },
+      "source": "README 'Sampling Parameters' (same as generation_config.json); thinking is OFF by template default (enable_thinking | default(false)) and is switched on explicitly"
+    }
+  }
+}

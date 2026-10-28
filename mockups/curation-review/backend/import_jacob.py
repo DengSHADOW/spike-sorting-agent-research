@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 from datetime import datetime, timezone
@@ -17,10 +18,10 @@ import h5py
 import numpy as np
 from scipy.io import loadmat
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(os.environ.get("SPIKE_REVIEW_DATA_ROOT", Path(__file__).resolve().parents[3])).resolve()
 DATASET = "cM2-e004_004-006_CH31"
 RUN = Path("zero-shot baseline/runs/qwen9b_rollout_comparison_20261013_8000_thinking6000_v2/attempt_003/minimal") / DATASET
-DATASETS = (DATASET, "cM2-e004_004-006_CH3", "cM2-e004_011-015_CH20", "cM2-e008_021-028_CH30")
+DATASETS = (DATASET, "cM2-e004_004-006_CH3", "cM2-e004_011-015_CH20", "cM2-e008_021-028_CH30", "cM2-e004_011-015_CH17")
 DEFAULT_OUTPUT = ROOT / "output/curation_review_local/jacob_ch31_v1"
 COLORS = ["#09675e", "#99582d", "#6560a5", "#9e3f65", "#3769a0", "#6b651b", "#8a4b1d", "#4a6572"]
 
@@ -56,7 +57,7 @@ def write_json(path, value):
 def scoped_row(dataset, input_path=None):
     # Reject scope before opening the MAT, checkpoints, or expert information.
     if dataset not in DATASETS:
-        raise ValueError("Only the four approved development channels can be imported")
+        raise ValueError("Only approved review channels can be imported")
     protocol = read_json(ROOT / "configs/curation/protocol_v1.json")
     block = dataset.rsplit("_CH", 1)[0]
     if block not in protocol["scope"]["development_blocks"]:
@@ -90,9 +91,13 @@ def load_inputs(path):
         assigns = np.asarray(s.hierarchy.assigns).reshape(-1)
         tree = np.asarray(s.hierarchy.tree)
         del s
+    if waves.ndim==1 and len(times)==1:
+        waves=waves.reshape(1,-1)
+    if tree.ndim==1 and tree.size in (0,4):
+        tree=tree.reshape(4,-1)
     if waves.shape[0] != len(times):
         waves = waves.T
-    if tree.shape[0] != 4 and tree.shape[1] == 4:
+    if tree.ndim==2 and tree.shape[0] != 4 and tree.shape[1] == 4:
         tree = tree.T
     if (waves.ndim != 2 or waves.shape[0] != len(times) or assigns.shape != times.shape
             or over.shape != times.shape or tree.ndim != 2 or tree.shape[0] != 4):
