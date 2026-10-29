@@ -19,7 +19,6 @@ from xml.etree import ElementTree as ET
 from zipfile import ZipFile
 
 import numpy as np
-from sklearn.metrics import adjusted_rand_score
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -181,6 +180,8 @@ def replay_source(
         else:
             prefix_open = False
         details.append(detail)
+
+    from sklearn.metrics import adjusted_rand_score  # audit only; importers need just the parsers
 
     final_assigns = data.get("curation_assigns")
     has_final = final_assigns is not None
