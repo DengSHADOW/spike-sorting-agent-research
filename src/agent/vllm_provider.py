@@ -3,8 +3,10 @@
 A provider only translates and transports: it turns API-neutral request content
 (instructions, text, PNG bytes, JSON schema) into a chat-completions body, sends it, checks the
 response and returns the parsed JSON answer. It knows nothing about curation. Accounting is in
-tokens and seconds; there are no prices. No fallback, no substitute answers; a truncated
-response is retried once with the identical body, anything else stops.
+tokens and seconds; there are no prices. No fallback, no substitute answers. A truncated response
+is retried once with the next seed (the identical seed would reproduce the same truncation); a
+transport failure (connection refused or reset, timeout, HTTP 5xx) is retried with the identical
+body up to TRANSPORT_RETRIES times; anything else stops.
 """
 from __future__ import annotations
 
@@ -13,13 +15,15 @@ import hashlib
 import json
 from pathlib import Path
 import threading
-from time import monotonic
+from time import monotonic, sleep
+import urllib.error
 import urllib.request
 
 from src.pipeline.curation_controller_v2 import LimitStop
 from src.pipeline.curation_engineering_v1 import digest, write_json
 
 SAMPLING_KEYS = {"temperature", "top_p", "top_k", "min_p", "presence_penalty", "repetition_penalty"}
+TRANSPORT_RETRIES, TRANSPORT_WAIT_S = 3, 10.
 
 
 class ProviderStop(RuntimeError):
@@ -40,13 +44,14 @@ class VllmProvider:
     kind = "VLLM_OPENAI_CHAT_NO_FALLBACK"
 
     def __init__(self, profile, ledger, *, base_url="http://127.0.0.1:8000", timeout=1800,
-                 max_total_tokens=None, transport=None):
+                 max_total_tokens=None, transport=None, transport_wait_s=TRANSPORT_WAIT_S):
         if not set(profile["sampling"]) <= SAMPLING_KEYS or type(profile["max_tokens"]) is not int:
             raise ValueError("Unexpected sampling keys or output limit")
         self.profile, self.ledger = profile, Path(ledger)
         self.send = transport or http_json(base_url, timeout)
         self.max_total_tokens = max_total_tokens
-        self.calls, self.truncations = 0, 0
+        self.calls, self.truncations, self.transport_retries = 0, 0, 0
+        self.transport_wait_s = transport_wait_s
         self.tokens = dict(prompt_tokens=0, completion_tokens=0)
         self.seconds = 0.
         self.lock = threading.Lock()  # the controller may call respond() from several threads
@@ -80,8 +85,10 @@ class VllmProvider:
                 raise LimitStop("Token budget reached")
         body = self.body(content)
         for attempt in (1, 2):
+            if attempt == 2:
+                body = dict(body, seed=body["seed"] + 1)
             started = monotonic()
-            raw = self.send("POST", "/v1/chat/completions", body)
+            raw = self.post(body, folder, attempt)
             seconds = monotonic() - started
             write_json(Path(folder) / f"response_{attempt}.json", raw)
             usage = raw.get("usage") or {}
@@ -109,12 +116,26 @@ class VllmProvider:
                 raise ProviderStop("Answer is not JSON") from exc
         raise ProviderStop("Truncated twice")
 
+    def post(self, body, folder, attempt):
+        for retry in range(TRANSPORT_RETRIES + 1):
+            try:
+                return self.send("POST", "/v1/chat/completions", body)
+            except (urllib.error.URLError, ConnectionError, TimeoutError) as exc:
+                code = getattr(exc, "code", None)
+                if (code is not None and code < 500) or retry == TRANSPORT_RETRIES:
+                    raise
+                with self.lock:
+                    self.transport_retries += 1
+                self.log(dict(folder=Path(folder).name, attempt=attempt, transport_retry=retry + 1, error=repr(exc)))
+                sleep(self.transport_wait_s * (retry + 1))
+
     def log(self, row):
         with self.lock, self.ledger.open("a", encoding="utf-8") as f:
             f.write(json.dumps(row, sort_keys=True) + "\n")
 
     def stats(self):
-        return dict(calls=self.calls, truncations=self.truncations, seconds=self.seconds, **self.tokens)
+        return dict(calls=self.calls, truncations=self.truncations, transport_retries=self.transport_retries,
+                    seconds=self.seconds, **self.tokens)
 
 
 def content_digest(content):

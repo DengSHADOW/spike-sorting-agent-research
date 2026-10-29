@@ -15,12 +15,28 @@ CPU-only Pod with `Failed to infer device type`; CLI startup must be verified
 on the GPU Pod. The deployment script's `--dry-run` works on CPU without
 invoking vLLM, and its startup options are present in the installed vLLM source.
 
-| Alias | Model | Pinned revision | Precision | Suggested GPU |
-|---|---|---|---|---|
-| `qwen27b` | `Qwen/Qwen3.5-27B` | `fc05daec18b0a78c049392ed2e771dde82bdf654` | BF16 | 80 GB |
-| `gemma4` | `google/gemma-4-E4B-it` | `ee0ef6023621cff504d758262d4e04895a5af4a2` | BF16 | 24 GB+ |
+| Alias | Model | Pinned revision | Precision | Suggested GPU | Status (2026-10-29) |
+|---|---|---|---|---|---|
+| `qwen27b` | `Qwen/Qwen3.5-27B` | `fc05daec18b0a78c049392ed2e771dde82bdf654` | BF16 | 80 GB | downloaded and verified |
+| `gemma4_31b` | `google/gemma-4-31B-it` | `842da3794eaa0b77d5f08bae87a17459d91ff475` | BF16 | 80 GB | planned, not downloaded |
+| `gemma4` | `google/gemma-4-E4B-it` | `ee0ef6023621cff504d758262d4e04895a5af4a2` | BF16 | 24 GB+ | **retired**: weights deleted |
 
-The download totals are 55,586,167,982 and 16,024,823,729 bytes. Keep the model
+The download totals are 55,586,167,982 bytes (Qwen) and 62,578,686,074 bytes (Gemma 31B); the deleted
+E4B was 16,024,823,729 bytes.
+
+Gemma-4-E4B-it ("E4B" = about 4B effective parameters, 8.0B stored including per-layer embeddings and
+the vision/audio encoders) ran all harness v2 rollouts of 2026-10-28/29. At the user's request it is
+replaced by the 31B dense model of the same family. Gemma-4-31B-it has 31.27B BF16 parameters, the same
+architecture (`Gemma4ForConditionalGeneration`) and reasoning parser, Apache-2.0, and is not gated
+(Hugging Face API, checked 2026-10-29). The E4B weights were deleted on 2026-10-29. Its config entries
+are kept with a `retired` note, so the historical runs stay interpretable, and the launcher refuses to
+download or serve it.
+
+**Before downloading the 31B model, free disk space.** It needs 62.6 GB plus a 5 GB margin, and the
+volume had about 19 GB free after the E4B deletion. Options are deleting the Qwen cache after the Qwen
+runs, or enlarging the network volume, which costs money and needs the owner's approval. The KV-cache
+capacity of the 31B on one H100 80 GB has not been measured: 62.6 GB of weights leave little room at
+`gpu_memory_utilization` 0.85. Keep the model
 cache at `/workspace/.cache/huggingface/hub` on the persistent network volume.
 The user authorized removal of the old Qwen3.5-9B cache; the deletion inventory
 is `output/local_model_setup_20261026/qwen9b_deletion.json`. Historical model
@@ -88,12 +104,13 @@ Measured on 2026-10-28 (H100 SXM 80 GB, driver 595.91, CUDA 13.2, image
 (torch 2.13.0+cu130, vLLM 0.32.0) loads without reinstalling. The first start
 failed during warm-up because FlashInfer JIT-compiles its top-k/top-p sampler and
 `ninja` is not on `PATH` (the system `nvcc` is 12.8, which does not match
-cu130 either). Start with the PyTorch sampler instead; the sampling parameters
-are unchanged:
+cu130 either). The launcher now sets `VLLM_USE_FLASHINFER_SAMPLER=0` unless the
+variable is already set, so vLLM uses the PyTorch sampler; the sampling
+parameters are unchanged.
 
-```bash
-VLLM_USE_FLASHINFER_SAMPLER=0 .venv-model-tools/bin/python scripts/deploy/local_models.py serve gemma4
-```
+Qwen3.5-27B load test (2026-10-29, same settings, no request sent): 51.0 GiB for weights, 14.0 GiB
+KV cache (189,493 tokens, about 7.7 concurrent 24,576-token requests), ready in about 5 minutes.
+The server was stopped afterwards; smoke and rollouts have not been run.
 
 With these settings Gemma-4-E4B-it used 14.6 GiB for weights and left KV cache
 for about 50 concurrent 24,576-token requests. The CH31 smoke test took 7–20 s

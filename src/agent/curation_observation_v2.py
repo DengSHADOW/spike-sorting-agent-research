@@ -8,6 +8,11 @@ with itself, so distinct events at the same time are kept.
 Default numbers exclude the template metrics that repeat what the waveform image shows
 (n_phases, trough_to_peak_ms, baseline_offset_ratio); numbers="full" adds them as the
 "all numbers" control condition (§3.7.5, shortcut checks).
+
+v2.3: the default numbers include the trough half-width, the waveform variability and the
+spike-like fraction, because the model did not read width or variability from the image
+(skill_v3 source R2). SPIKE_LIKE is calibrated on the expert curation of the four development
+channels and is not held-out.
 """
 from __future__ import annotations
 
@@ -25,7 +30,7 @@ from scipy.stats import poisson
 from src.agent.curation_observation_v1 import _tree, member_sample
 from src.pipeline.curation_controller_v2 import correlation, split_available
 
-VERSION = "observation-v2"
+VERSION = "observation-v2.3"
 NUMBERS = ("default", "full")
 REFRACTORY_S = .002
 WINDOW_S, BIN_S = .05, .001
@@ -37,6 +42,9 @@ STYLE = {"font.size": 11, "axes.titlesize": 11, "axes.labelsize": 11}
 BLUE, ORANGE, GREY, RED = "tab:blue", "tab:orange", "0.45", "red"
 
 TEMPLATE_KEYS = ("n_phases", "trough_to_peak_ms", "baseline_offset_ratio")
+MORPHOLOGY_KEYS = ("trough_half_width_ms", "waveform_variability")
+# A hierarchy leaf is spike-like when its mean trough is narrow and its spikes are consistent (R2).
+SPIKE_LIKE = dict(half_width_ms=.2, variability=.15)
 DEFINITIONS = {
     "sampling_rate_hz": "Samples per second of the waveform snippets.",
     "waveform_window_ms": "Duration of each waveform snippet.",
@@ -59,6 +67,13 @@ DEFINITIONS = {
                                 "and n_spikes).",
     "amplitude_median": "Median peak-to-trough amplitude of the cluster's spikes (source units).",
     "amplitude_cv": "Standard deviation / mean of the peak-to-trough amplitudes.",
+    "trough_half_width_ms": "Width of the mean waveform's trough at half its depth below zero (ms).",
+    "waveform_variability": "Largest across-spike standard deviation over the snippet divided by the mean waveform's "
+                            "peak-to-trough amplitude.",
+    "spike_like_fraction": "Fraction of the cluster's spikes that lie in hierarchy leaves whose own mean waveform is "
+                           f"spike-like: trough_half_width_ms at most {SPIKE_LIKE['half_width_ms']} and "
+                           f"waveform_variability below {SPIKE_LIKE['variability']} (calibrated on expert curation of "
+                           "development recordings). Near 0 = no spike-like part to split out.",
     "children_dprime": "Separation of the two parts SPLIT would produce: difference of their mean projections on the "
                        "line joining their mean waveforms, divided by the pooled standard deviation. Null when SPLIT "
                        "is not available.",
@@ -72,21 +87,34 @@ DEFINITIONS = {
     "target_contamination": "hill_contamination of the target.",
     "correlation": "Pearson correlation of the two mean waveforms; used only to choose which pairs to ask about.",
     "amplitude_ratio": "Median amplitude of the source / median amplitude of the target.",
-    "ccg_refractory_ratio": "Cross-correlogram counts per bin within ±2 ms divided by counts per bin at 10–50 ms. "
+    "ccg_refractory_ratio": "Cross-correlogram counts per bin within ±2 ms divided by counts per bin at 10–50 ms, "
+                            "counting only the observable part of the ±2 ms zone (outside the detector dead time). "
                             "Near 0 = clean refractory gap; near 1 = no gap. Null when the 10–50 ms bins are empty.",
+    "ccg_zero_lag_ratio": "Cross-correlogram counts per bin within ±1 ms divided by counts per bin at 10–50 ms, "
+                          "counting only the observable part outside the detector dead time. "
+                          "Well above 1 = a sharp peak at zero lag (near-simultaneous events in both clusters), which "
+                          "fills the refractory zone; it is not a burst. Null when the 10–50 ms bins are empty or the "
+                          "dead time covers the whole ±1 ms.",
     "merged_contamination": "hill_contamination of the hypothetical merged cluster.",
-    "contamination_increase": "merged_contamination minus the larger of source_contamination and target_contamination.",
+    "contamination_increase": "merged_contamination minus the larger of source_contamination and target_contamination. "
+                              "Null when any of the three estimates is saturated at 0.5: the increase cannot be "
+                              "measured then, which is not the same as no increase.",
+    "isi_violation_increase": "isi_violation_rate of the hypothetical merged cluster minus the larger of the source's "
+                              "and the target's isi_violation_rate. Does not saturate.",
 }
 COMMON = ("sampling_rate_hz", "waveform_window_ms", "refractory_ms", "censored_ms", "recording_span_s")
 FIELDS = {"single": COMMON + ("cluster_id", "n_spikes", "n_leaves", "firing_rate_hz", "presence_ratio",
                               "isi_violation_rate", "hill_contamination", "sliding_rp_contamination",
-                              "amplitude_median", "amplitude_cv", "children_dprime"),
+                              "amplitude_median", "amplitude_cv", *MORPHOLOGY_KEYS, "spike_like_fraction",
+                              "children_dprime"),
           "pair": COMMON + ("source_cluster_id", "target_cluster_id", "n_source", "n_target", "source_contamination",
                             "target_contamination", "correlation", "amplitude_ratio", "ccg_refractory_ratio",
-                            "merged_contamination", "contamination_increase")}
+                            "ccg_zero_lag_ratio", "merged_contamination", "contamination_increase",
+                            "isi_violation_increase", *(f"source_{k}" for k in MORPHOLOGY_KEYS),
+                            "source_spike_like_fraction")}
 IMAGES = {
     "waveform": "All spikes of the cluster as a grey density, overlaid with up to 500 member waveforms sampled across "
-                "every hierarchy leaf (blue).",
+                "every hierarchy leaf (blue). Red: mean waveform; red bar: its trough width at half depth.",
     "isi_acg": "Left: inter-spike-interval histogram, 0–50 ms (red line = 2 ms). Right: autocorrelogram, ±50 ms in 1 ms "
                "bins (red band = ±2 ms refractory zone).",
     "amplitude": "Left: peak-to-trough amplitude histogram of all spikes. Right: amplitude of every spike over recording "
@@ -191,11 +219,65 @@ def template_metrics(mean, fs):
                 baseline_offset_ratio=edge / ptp if ptp > 0 else None)
 
 
-def refractory_ratio(counts, e):
-    centre = (e[:-1] >= -REFRACTORY_S - 1e-12) & (e[1:] <= REFRACTORY_S + 1e-12)
+def half_depth_crossings(mean):
+    """(left, right, level): the trough's crossings of half its depth below zero, in samples, linearly
+    interpolated (a snippet edge if the trough reaches it). None if the mean has no negative trough."""
+    tr = int(np.argmin(mean))
+    if mean[tr] >= 0:
+        return None
+    half, end = float(mean[tr]) / 2, len(mean) - 1
+    left = right = tr
+    while left > 0 and mean[left - 1] < half:
+        left -= 1
+    while right < end and mean[right + 1] < half:
+        right += 1
+    lo = left - 1 + (mean[left - 1] - half) / (mean[left - 1] - mean[left]) if left > 0 else 0.
+    hi = right + (half - mean[right]) / (mean[right + 1] - mean[right]) if right < end else float(end)
+    return float(lo), float(hi), half
+
+
+def half_width_ms(mean, fs):
+    """Width of the mean waveform's trough at half its depth below zero."""
+    c = half_depth_crossings(mean)
+    return None if c is None else (c[1] - c[0]) / fs * 1000
+
+
+def waveform_variability(w):
+    """Largest across-spike standard deviation over the snippet, relative to the mean waveform's peak-to-trough."""
+    ptp = float(np.ptp(w.mean(axis=0)))
+    return float(w.std(axis=0).max() / ptp) if ptp > 0 else None
+
+
+def morphology(w, fs):
+    return dict(trough_half_width_ms=half_width_ms(w.mean(axis=0), fs), waveform_variability=waveform_variability(w))
+
+
+def spike_like_fraction(m, ids, fs):
+    """Fraction of ids in hierarchy leaves whose own mean waveform meets SPIKE_LIKE (leaves never change)."""
+    leaves = m.overcluster_assigns[ids]
+    order = np.argsort(leaves, kind="stable")
+    _, start = np.unique(leaves[order], return_index=True)
+    like = 0
+    for part in np.split(ids[order], start[1:]):
+        w = m.waveforms[part]
+        hw, v = half_width_ms(w.mean(axis=0), fs), waveform_variability(w)
+        if hw is not None and v is not None and hw <= SPIKE_LIKE["half_width_ms"] and v < SPIKE_LIKE["variability"]:
+            like += len(part)
+    return like / len(ids)
+
+
+def refractory_ratio(counts, e, half=REFRACTORY_S, censored=0.):
+    """Centre counts per unit of observable lag: lags inside the detector dead time cannot occur, so
+    without this correction two unrelated clusters would show a partly empty centre (2026-10-28)."""
+    if censored < 0:
+        raise ValueError("Negative dead time")
+    if censored >= half:
+        return None  # the whole centre is inside the dead time
+    centre = (e[:-1] >= -half - 1e-12) & (e[1:] <= half + 1e-12)
     shoulder = (np.abs(e[:-1] + BIN_S / 2) >= .01)
     s = counts[shoulder].mean()
-    return float(counts[centre].mean() / s) if s > 0 else None
+    observable = (half - censored) / half
+    return float(counts[centre].mean() / observable / s) if s > 0 else None
 
 
 def split_children(m, cid):
@@ -228,10 +310,16 @@ def dprime(w, a, b):
 
 def stratified(ids, leaves, limit):
     """Positions into ids: each hierarchy leaf gets at least min(size, base) lines, the rest in proportion;
-    within a leaf by SHA256(global index) order, so the choice is independent of row order and RNG."""
+    within a leaf by SHA256(global index) order, so the choice is independent of row order and RNG.
+    With more leaves than lines, one line from each of `limit` leaves chosen in the same hash order
+    (previously the leaves after the first `limit` were dropped as a block)."""
     if len(ids) <= limit:
         return np.arange(len(ids))
     unique, inverse = np.unique(leaves, return_inverse=True)
+    if len(unique) > limit:
+        reps = np.array([pos[member_sample(ids[pos], 1)[0]] for pos in
+                         (np.flatnonzero(inverse == k) for k in range(len(unique)))])
+        return reps[member_sample(ids[reps], limit)]
     counts = np.bincount(inverse)
     quota = np.minimum(counts, max(1, min(5, limit // len(unique))))
     spare, extra = limit - int(quota.sum()), counts - quota
@@ -320,10 +408,17 @@ def single_images(m, cid, fs, span, children):
         ax.imshow(np.log1p(density), origin="lower", aspect="auto", cmap="Greys", extent=(x[0], x[-1], low, high))
         sel = stratified(ids, leaves, MAX_LINES)
         _lines(ax, x, w[sel], BLUE, .12)
+        mean = w.mean(axis=0)
+        ax.plot(x, mean, color=RED, linewidth=1.5)
+        crossings = half_depth_crossings(mean)
+        if crossings is not None:
+            lo, hi, half = crossings
+            ax.plot([lo / fs * 1000, hi / fs * 1000], [half, half], color=RED, linewidth=3)
         ax.axhline(0, color="black", linestyle="--", linewidth=.5)
+        width = "none" if crossings is None else f"{(crossings[1] - crossings[0]) / fs * 1000:.2f} ms"
         ax.set(xlim=(x[0], x[-1]), ylim=(low, high), xlabel="Time (ms)", ylabel="Amplitude (source units)",
-               title=f"Cluster {cid}: {len(ids)} spikes (grey density) + {len(sel)} drawn from "
-                     f"{len(np.unique(leaves))} leaves")
+               title=f"Cluster {cid}: {len(ids)} spikes + {len(sel)} drawn from {len(np.unique(leaves))} leaves; "
+                     f"half-width {width}")
         images["waveform"] = _png(fig)
 
         fig, (a1, a2) = plt.subplots(1, 2, figsize=(11, 4))
@@ -412,6 +507,7 @@ def observe(m, kind, cid, target=None, *, sampling_rate, numbers="default"):
                    sliding_rp_contamination=sliding_rp_contamination(t, duration, censored),
                    amplitude_median=float(np.median(amps)),
                    amplitude_cv=float(amps.std() / amps.mean()) if amps.mean() > 0 else None,
+                   **morphology(w, fs), spike_like_fraction=spike_like_fraction(m, ids, fs),
                    children_dprime=dprime(m.waveforms, children[0][1], children[1][1]) if children else None)
         if numbers == "full":
             out.update(template_metrics(w.mean(axis=0), fs))
@@ -422,15 +518,23 @@ def observe(m, kind, cid, target=None, *, sampling_rate, numbers="default"):
         ids2 = _active(m, target)
         t2 = m.spike_times[ids2]
         cs, ct = hill_contamination(t, duration, censored), hill_contamination(t2, duration, censored)
-        merged = hill_contamination(np.concatenate([t, t2]), duration, censored)
+        both = np.concatenate([t, t2])
+        merged = hill_contamination(both, duration, censored)
+        estimates = (cs, ct, merged)
+        rates = (isi_rate(t), isi_rate(t2), isi_rate(both))
+        counts = ccg(t, t2)
         med_s, med_t = float(np.median(np.ptp(w, axis=1))), float(np.median(np.ptp(m.waveforms[ids2], axis=1)))
         out.update(source_cluster_id=int(cid), target_cluster_id=int(target), n_source=len(ids), n_target=len(ids2),
                    source_contamination=cs, target_contamination=ct,
                    correlation=correlation(w.mean(axis=0), m.waveforms[ids2].mean(axis=0)),
                    amplitude_ratio=med_s / med_t if med_t > 0 else None,
-                   ccg_refractory_ratio=refractory_ratio(ccg(t, t2), edges()),
+                   ccg_refractory_ratio=refractory_ratio(counts, edges(), censored=censored),
+                   ccg_zero_lag_ratio=refractory_ratio(counts, edges(), half=BIN_S, censored=censored),
                    merged_contamination=merged,
-                   contamination_increase=None if None in (cs, ct, merged) else merged - max(cs, ct))
+                   contamination_increase=None if None in estimates or max(estimates) >= .5 else merged - max(cs, ct),
+                   isi_violation_increase=None if None in rates else rates[2] - max(rates[:2]),
+                   **{f"source_{k}": v for k, v in morphology(w, fs).items()},
+                   source_spike_like_fraction=spike_like_fraction(m, ids, fs))
         if numbers == "full":
             out.update({f"source_{k}": v for k, v in template_metrics(w.mean(axis=0), fs).items()})
         images = pair_images(m, cid, target, fs, span)
@@ -442,5 +546,6 @@ def observe(m, kind, cid, target=None, *, sampling_rate, numbers="default"):
 
 
 def definitions(measurements):
-    return {k: DEFINITIONS[k.removeprefix("source_")] if k.startswith("source_") and k.removeprefix("source_") in
-            TEMPLATE_KEYS else DEFINITIONS[k] for k in measurements if not k.endswith("cluster_id") and k != "cluster_id"}
+    of_source = set(TEMPLATE_KEYS) | set(MORPHOLOGY_KEYS) | {"spike_like_fraction"}
+    return {k: f"Of the source: {DEFINITIONS[k.removeprefix('source_')]}" if k.removeprefix("source_") in of_source
+            and k.startswith("source_") else DEFINITIONS[k] for k in measurements if not k.endswith("cluster_id")}

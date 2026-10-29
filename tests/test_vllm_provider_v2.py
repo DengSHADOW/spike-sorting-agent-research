@@ -89,12 +89,13 @@ def test_body_is_chat_completions_with_schema_sampling_thinking_and_images(tmp_p
     assert p.stats()["prompt_tokens"] == 3000 and (tmp_path / "response_1.json").exists()
 
 
-def test_truncation_is_retried_once_with_the_identical_body_then_stops(tmp_path):
+def test_truncation_is_retried_once_with_the_next_seed_then_stops(tmp_path):
     profile = PROFILES["qwen27b"]
     server = FakeServer(profile, [answer("KEEP"), answer("KEEP")], finish=["length", "stop"])
     p = VllmProvider(profile, tmp_path / "ledger.jsonl", transport=server)
     assert p.respond(content(), folder=tmp_path)["action"] == "KEEP"
-    assert server.bodies[0] == server.bodies[1] and p.truncations == 1
+    first, second = server.bodies
+    assert second["seed"] == first["seed"] + 1 and dict(second, seed=first["seed"]) == first and p.truncations == 1
     server = FakeServer(profile, [answer("KEEP")] * 2, finish=["length", "length"])
     (tmp_path / "second").mkdir()
     with pytest.raises(ProviderStop):
@@ -138,3 +139,31 @@ def test_model_decider_runs_controller_v2_end_to_end_offline(tmp_path):
     assert enums == [["KEEP", "SPLIT", "DISCARD"], ["KEEP", "DISCARD"], ["MERGE", "NOT_MERGE", "DISCARD"]]
     assert [len(b["messages"][1]["content"]) - 1 for b in server.bodies] == [4, 4, 3]
     assert (tmp_path / "run" / "step_00001" / "request_content.json").exists()
+
+
+def test_transport_failures_are_retried_with_the_identical_body_and_client_errors_stop(tmp_path):
+    import urllib.error
+    profile = PROFILES["gemma4"]
+    good = FakeServer(profile, [answer("KEEP")], finish=["stop"])
+    failures = [ConnectionResetError("reset"), urllib.error.HTTPError("u", 503, "busy", None, None)]
+    bodies = []
+
+    def flaky(method, path, body=None):
+        bodies.append(body)
+        if failures:
+            raise failures.pop(0)
+        return good(method, path, body)
+
+    p = VllmProvider(profile, tmp_path / "ledger.jsonl", transport=flaky, transport_wait_s=0)
+    assert p.respond(content(), folder=tmp_path)["action"] == "KEEP"
+    assert p.transport_retries == 2 and bodies[0] == bodies[1] == bodies[2] and p.calls == 1
+    rows = [json.loads(line) for line in (tmp_path / "ledger.jsonl").read_text().splitlines()]
+    assert [r.get("transport_retry") for r in rows] == [1, 2, None]
+
+    def bad_request(method, path, body=None):
+        raise urllib.error.HTTPError("u", 400, "bad", None, None)
+
+    (tmp_path / "b").mkdir()
+    with pytest.raises(urllib.error.HTTPError):
+        VllmProvider(profile, tmp_path / "l2.jsonl", transport=bad_request, transport_wait_s=0).respond(
+            content(), folder=tmp_path / "b")

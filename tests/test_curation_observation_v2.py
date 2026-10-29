@@ -75,6 +75,34 @@ def test_template_metrics_count_lobes_and_width():
     assert t["baseline_offset_ratio"] < .01
 
 
+def test_half_width_and_variability_measure_the_mean_trough():
+    fs = 30000.
+    x = np.arange(45, dtype=float)
+    for sigma in (1.5, 3., 6.):
+        wave = -np.exp(-((x - 17) / sigma) ** 2)
+        expected = 2 * sigma * np.sqrt(np.log(2)) / fs * 1000  # full width at half depth of a Gaussian
+        assert obs.half_width_ms(wave, fs) == pytest.approx(expected, rel=.05)
+    assert obs.half_width_ms(np.abs(np.sin(x)), fs) is None
+    rng = np.random.default_rng(0)
+    wave = -np.exp(-((x - 17) / 2.) ** 2)
+    assert obs.waveform_variability(wave + rng.normal(scale=.1, size=(4000, 45))) == pytest.approx(.1, rel=.1)
+
+
+def test_spike_like_fraction_counts_spikes_in_narrow_consistent_leaves():
+    fs = 30000.
+    x = np.arange(45, dtype=float)
+    rng = np.random.default_rng(1)
+    narrow, broad = -np.exp(-((x - 17) / 2.) ** 2), -np.exp(-((x - 17) / 8.) ** 2)
+    sizes = {1: (300, narrow, .02), 2: (100, broad, .02), 3: (100, narrow, .5)}  # leaf 3: too variable
+    over = np.concatenate([[k] * n for k, (n, _, _) in sizes.items()])
+    waves = np.vstack([s + rng.normal(scale=e, size=(n, 45)) for n, s, e in sizes.values()])
+    tree = np.array([[1, 1], [2, 3], [.9, .8], [0, 0]], dtype=float)
+    m = ClusterManager(np.ones(len(over), int), over, tree, np.sort(rng.uniform(0, 600, len(over))), waves)
+    assert obs.spike_like_fraction(m, np.arange(len(over)), fs) == pytest.approx(300 / 500)
+    single, _, _ = obs.observe(m, "single", 1, sampling_rate=fs)
+    assert single["spike_like_fraction"] == pytest.approx(.6) and single["trough_half_width_ms"] > .1
+
+
 def manager(seed=0):
     """Cluster 1 = leaves 1, 2, 3 merged as (1←2) then (1←3); cluster 4 = leaf 4. Leaf 3 has another shape."""
     rng = np.random.default_rng(seed)
@@ -125,6 +153,45 @@ def test_observations_have_fixed_fields_images_and_no_unknown_numbers(numbers):
         assert set(obs.definitions(values)) == {k for k in values if not k.endswith("cluster_id")}
     with pytest.raises(ValueError):
         obs.observe(m, "pair", 1, 1, sampling_rate=30000.)
+
+
+def test_saturated_contamination_reports_no_increase_and_zero_lag_peaks_are_measured():
+    """A saturated target used to report contamination_increase 0.0 for any merge (rollout 2026-10-28)."""
+    rng = np.random.default_rng(3)
+    x = np.linspace(0, 1, 30)
+    target = np.sort(rng.uniform(0, 600, 6000))  # Poisson: no refractory gap, Hill saturates at 0.5
+    source = np.sort(target[:300] + .0008)  # the same events 0.8 ms later
+    times = np.r_[target, source]
+    order = np.argsort(times, kind="stable")
+    over = np.r_[np.ones(len(target), int), np.full(len(source), 2)][order]
+    waves = (-np.sin(np.pi * x) + rng.normal(scale=.05, size=(len(times), 30)))
+    m = ClusterManager(over.copy(), over, np.array([[1.], [2.]]), times[order], waves)
+    pair, _, _ = obs.observe(m, "pair", 2, 1, sampling_rate=30000.)
+    assert pair["target_contamination"] == .5 and pair["contamination_increase"] is None
+    assert pair["isi_violation_increase"] > 0
+    assert pair["ccg_zero_lag_ratio"] > 5 and pair["ccg_zero_lag_ratio"] > pair["ccg_refractory_ratio"]
+
+
+def test_ccg_ratios_count_only_lags_outside_the_detector_dead_time():
+    """Two unrelated trains seen through one detector: the centre is not cleaner than the shoulders."""
+    rng = np.random.default_rng(4)
+    dead, span = .00053, 3000.
+    t = np.sort(rng.uniform(0, span, 120000))
+    lab = rng.integers(0, 2, len(t))
+    keep = np.r_[True, np.diff(t) >= dead]  # the detector cannot see a second event within the dead time
+    a, b = t[keep & (lab == 0)], t[keep & (lab == 1)]
+    counts = obs.ccg(a, b)
+    assert .9 < obs.refractory_ratio(counts, obs.edges(), censored=dead) < 1.1
+    assert obs.refractory_ratio(counts, obs.edges()) < .85  # uncorrected: looks partly clean
+    assert obs.refractory_ratio(counts, obs.edges(), half=obs.BIN_S, censored=obs.BIN_S) is None
+
+
+def test_sampling_with_more_leaves_than_lines_spreads_over_leaves():
+    ids = np.arange(1000)
+    leaves = ids // 2  # 500 leaves of 2 spikes, 100 lines
+    sel = obs.stratified(ids, leaves, 100)
+    assert len(sel) == 100 and len(set(leaves[sel])) == 100
+    assert leaves[sel].max() > 300  # not just the first 100 leaves
 
 
 @pytest.mark.skipif(not (ROOT / "data").exists(), reason="development MAT files not present")

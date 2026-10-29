@@ -35,7 +35,24 @@
       "chat_template_kwargs": {
         "enable_thinking": true
       },
-      "source": "README 'Sampling Parameters' (same as generation_config.json); thinking is OFF by template default (enable_thinking | default(false)) and is switched on explicitly"
+      "source": "README 'Sampling Parameters' (same as generation_config.json); thinking is OFF by template default (enable_thinking | default(false)) and is switched on explicitly",
+      "retired": "2026-10-29: weights deleted from the cache at the user's request; replaced by gemma4_31b. Kept here only to describe the historical harness v2 runs (skill_v1-v4)."
+    },
+    "gemma4_31b": {
+      "repo_id": "google/gemma-4-31B-it",
+      "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "dtype": "bfloat16",
+      "served_name": "google/gemma-4-31B-it",
+      "max_tokens": 8000,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 64
+      },
+      "chat_template_kwargs": {
+        "enable_thinking": true
+      },
+      "source": "README 'Sampling Parameters' and generation_config.json at revision 842da379 (checked 2026-10-29), same as E4B; thinking switched on explicitly as for E4B"
     }
   }
 }

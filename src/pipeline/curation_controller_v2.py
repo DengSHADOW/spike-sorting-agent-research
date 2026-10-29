@@ -347,7 +347,8 @@ class RoundsController(CurationControllerV2):
             q["action"] = d["action"]
             self.log("decision", kind=q["kind"], cid=int(q["cid"]), target=q.get("target"), allowed=q["allowed"],
                      action=d["action"], rationale=d["rationale"], round=self.round,
-                     observations={k: v for k, v in d.items() if k not in ("action", "rationale")} or None)
+                     observations={k: v for k, v in d.items() if k not in ("action", "rationale", "gate")} or None,
+                     gate=d.get("gate"))
         return questions
 
     # ------------------------------------------------------------------ execution

@@ -64,8 +64,8 @@ def test_instructions_carry_contract_scoped_rules_offered_actions_and_ordered_fi
     pair = dec.instructions_v2(contract, skill, "pair", ["MERGE", "NOT_MERGE", "DISCARD"])
     assert "[P1]" in pair and "[S1]" not in pair
     s = dec.schema_v2("single", ["KEEP", "DISCARD", "SPLIT"])
-    assert list(s["properties"]) == ["waveform", "refractory", "amplitude_time", "tree", "split_preview", "action",
-                                     "rationale"]
+    assert list(s["properties"]) == ["waveform", "morphology", "spike_like_parts", "refractory", "amplitude_time",
+                                     "tree", "split_preview", "action", "rationale"]
     assert s["properties"]["action"]["enum"] == ["KEEP", "SPLIT", "DISCARD"]
     assert list(dec.schema_v2("pair", ["MERGE", "NOT_MERGE", "DISCARD"])["properties"])[:4] == \
         ["overlay", "ccg", "amplitude_time", "source_validity"]
@@ -73,7 +73,7 @@ def test_instructions_carry_contract_scoped_rules_offered_actions_and_ordered_fi
 
 def test_answers_outside_the_schema_are_rejected():
     good = {"overlay": {"label": "similar", "note": "x"}, "ccg": {"label": "contaminated", "note": "x"},
-            "amplitude_time": {"label": "separate", "note": "x"}, "source_validity": {"label": "valid", "note": "x"},
+            "amplitude_time": {"label": "separate_levels", "note": "x"}, "source_validity": {"label": "valid", "note": "x"},
             "action": "NOT_MERGE", "rationale": "x"}
     allowed = ["MERGE", "NOT_MERGE", "DISCARD"]
     assert dec.check_answer(dict(good), "pair", allowed)["action"] == "NOT_MERGE"
@@ -107,3 +107,92 @@ def test_rounds_skill_decider_and_provider_run_end_to_end_in_parallel(tmp_path):
     request = json.loads((c.out / "step_00001" / "request_content.json").read_text())
     assert manifest["skill_sha256"] == request["skill_sha256"] == d.skill_sha256
     assert (c.out / "step_00001" / "split_preview.png").exists()
+
+
+def test_skill_v2_gates_replace_actions_that_contradict_the_models_own_labels(tmp_path):
+    skill, _ = dec.load_skill(dec.SKILL_V2)
+    assert skill["parent"] == "skill_v1" and {g["id"] for g in skill["gates"]} == {"G1", "G2"}
+    obs = lambda **labels: {k: {"label": v, "note": "x"} for k, v in labels.items()}
+    pair = dict(obs(overlay="similar", ccg="zero_lag_peak", amplitude_time="separate_levels", source_validity="valid"),
+                action="MERGE", rationale="x")
+    gated = dec.apply_gates(skill, "pair", pair, ["MERGE", "NOT_MERGE", "DISCARD"])
+    assert gated["action"] == "NOT_MERGE" and gated["gate"] == dict(id="G1", model_action="MERGE",
+                                                                    failed=["amplitude_time", "ccg"])
+    clean = dict(pair, **obs(ccg="burst_peak_5_10ms", amplitude_time="continuous_or_handoff"))
+    assert dec.apply_gates(skill, "pair", clean, ["MERGE", "NOT_MERGE", "DISCARD"]) == clean
+    single = dict(obs(waveform="one_family", refractory="partly_contaminated", amplitude_time="stable",
+                      tree="single_component"), action="KEEP", rationale="x")
+    assert dec.apply_gates(skill, "single", single, ["KEEP", "DISCARD"]) == single  # SPLIT not offered
+    split = dict(single, **obs(split_preview="same_unit"))
+    assert dec.apply_gates(skill, "single", split, ["KEEP", "SPLIT", "DISCARD"])["action"] == "SPLIT"
+    text = dec.instructions_v2(dec.CONTRACT.read_text(), skill, "pair", ["MERGE", "NOT_MERGE", "DISCARD"])
+    assert "[G1]" in text and "[G2]" not in text and "[P8]" in text
+    bad = dict(skill, gates=[dict(skill["gates"][0], requires={"ccg": ["fine"]})])
+    (tmp_path / "bad.json").write_text(json.dumps(bad))
+    with pytest.raises(ValueError):
+        dec.load_skill(tmp_path / "bad.json")
+
+
+def test_skill_v3_gates_chain_keep_split_discard_on_the_models_morphology_labels():
+    skill, _ = dec.load_skill(dec.SKILL_V3)
+    assert skill["parent"] == "skill_v2" and [g["id"] for g in skill["gates"]] == ["G1", "G2", "G3", "G4"]
+    obs = lambda **labels: {k: {"label": v, "note": "x"} for k, v in labels.items()}
+    base = dict(obs(waveform="one_family", morphology="spike_like", spike_like_parts="present", refractory="clean",
+                    amplitude_time="stable", tree="single_component", split_preview="same_unit"),
+                action="KEEP", rationale="x")
+    every, leaf = ["KEEP", "SPLIT", "DISCARD"], ["KEEP", "DISCARD"]
+    gate = lambda answer, allowed=every: dec.apply_gates(skill, "single", answer, allowed)
+    assert gate(base) == base
+    broad = dict(base, **obs(morphology="broad_or_slow"))
+    assert gate(broad)["action"] == "SPLIT" and gate(broad)["gate"]["id"] == "G2"  # a unit may be embedded
+    hopeless = dict(broad, **obs(spike_like_parts="none"))
+    assert gate(hopeless)["gate"] == dict(id="G2>G4", model_action="KEEP", failed=["morphology", "spike_like_parts"])
+    assert gate(hopeless)["action"] == "DISCARD"
+    assert gate(broad, leaf)["action"] == "DISCARD"  # G3: nothing to split, not spike-like
+    contaminated = dict(base, **obs(refractory="partly_contaminated"))
+    assert gate(contaminated)["action"] == "SPLIT" and gate(contaminated, leaf) == contaminated
+    noise_split = dict(hopeless, action="SPLIT")
+    assert gate(noise_split)["action"] == "DISCARD" and gate(dict(base, action="SPLIT"))["action"] == "SPLIT"
+    sparse = dict(base, **obs(refractory="too_few_spikes"))
+    assert gate(sparse) == sparse
+
+
+def test_skill_v4_does_not_discard_a_cluster_the_model_says_has_spike_like_parts():
+    skill, _ = dec.load_skill(dec.SKILL_V4)
+    assert skill["parent"] == "skill_v3" and [g["id"] for g in skill["gates"]] == ["G1", "G2", "G3", "G5", "G4"]
+    obs = lambda **labels: {k: {"label": v, "note": "x"} for k, v in labels.items()}
+    root = dict(obs(waveform="one_family", morphology="too_variable", spike_like_parts="present",
+                    refractory="partly_contaminated", amplitude_time="stable", tree="single_component",
+                    split_preview="same_unit"), action="DISCARD", rationale="x")
+    every, leaf = ["KEEP", "SPLIT", "DISCARD"], ["KEEP", "DISCARD"]
+    assert dec.apply_gates(skill, "single", root, every)["gate"] == dict(id="G5", model_action="DISCARD",
+                                                                         failed=["spike_like_parts"])
+    assert dec.apply_gates(skill, "single", root, every)["action"] == "SPLIT"
+    assert dec.apply_gates(skill, "single", root, leaf) == root  # nothing to split: the discard stands
+    noise = dict(root, **obs(spike_like_parts="none"))
+    assert dec.apply_gates(skill, "single", noise, every) == noise
+    assert dec.apply_gates(skill, "single", dict(noise, action="KEEP"), every)["action"] == "DISCARD"  # G2>G4
+
+
+def test_gated_decisions_are_logged_with_the_models_original_action(tmp_path):
+    profile = PROFILES["gemma4"]
+
+    class Contaminated(SchemaServer):
+        def __call__(self, method, path, body=None):
+            out = super().__call__(method, path, body)
+            if path.startswith("/v1/chat"):
+                answer = json.loads(out["choices"][0]["message"]["content"])
+                if "refractory" in answer:
+                    answer["refractory"]["label"] = "partly_contaminated"
+                out["choices"][0]["message"]["content"] = json.dumps(answer)
+            return out
+
+    server = Contaminated(profile, lambda kind, allowed: "KEEP" if kind == "single" else "NOT_MERGE")
+    d = dec.SkillDecider(VllmProvider(profile, tmp_path / "ledger.jsonl", transport=server))
+    c = RoundsController(manager(), "cM2-e004_004-006_CH31", tmp_path / "run", decider=d, sampling_rate=30000.,
+                         manifest=d.describe())
+    c.run()
+    events = [json.loads(line) for line in (c.out / "events.jsonl").read_text().splitlines()]
+    gated = [e for e in events if e["event"] == "decision" and e.get("gate")]
+    assert gated and all(e["action"] == "SPLIT" and e["gate"]["model_action"] == "KEEP" for e in gated)
+    assert all("gate" not in (e["observations"] or {}) for e in events if e["event"] == "decision")

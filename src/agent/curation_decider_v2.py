@@ -84,7 +84,10 @@ from src.agent import curation_observation_v2 as obs_v2
 
 CONTRACT = ROOT / "configs/controller_v2/contract.txt"
 SKILL_V1 = ROOT / "configs/controller_v2/skills/skill_v1.json"
-OUTPUT_VERSION = "observe-then-act-v1"
+SKILL_V2 = ROOT / "configs/controller_v2/skills/skill_v2.json"
+SKILL_V3 = ROOT / "configs/controller_v2/skills/skill_v3.json"
+SKILL_V4 = ROOT / "configs/controller_v2/skills/skill_v4.json"
+OUTPUT_VERSION = "observe-then-act-v3"
 ACTION_TEXT = {
     "single": {"KEEP": "retain the cluster.",
                "SPLIT": "undo the cluster's last hierarchical merge; both parts are judged next.",
@@ -99,9 +102,18 @@ OBSERVATIONS = {
         ("waveform", "waveform", ("one_family", "multiple_families", "not_spike_like", "unclear"),
          "Do the spikes form one consistent waveform family, several distinct families, or shapes that do not "
          "look like spikes?"),
-        ("refractory", "isi_acg", ("clean", "partly_contaminated", "absent", "noise_like", "unclear"),
+        ("morphology", "waveform", ("spike_like", "broad_or_slow", "too_variable", "wrong_phases", "unclear"),
+         "Is the red mean waveform a sharp spike (narrow trough, fast descent and return, starting near baseline, "
+         "spikes tightly around it), or broad / slowly descending (see trough_half_width_ms), too variable for its "
+         "spike count (see waveform_variability), or with more than three phases or only one?"),
+        ("spike_like_parts", None, ("present", "none", "unclear"),
+         "From the waveform image and spike_like_fraction: does the cluster contain spike-like parts that a unit "
+         "could be split out of (spike_like_fraction about 0.05 or more), or none?"),
+        ("refractory", "isi_acg", ("clean", "partly_contaminated", "absent", "noise_like", "too_few_spikes",
+                                   "unclear"),
          "Is the autocorrelogram's ±2 ms zone empty relative to its shoulders, partly filled, as full as the "
-         "shoulders, or is the autocorrelogram noise-like (triangular or strongly periodic)?"),
+         "shoulders, is the autocorrelogram noise-like (triangular or strongly periodic), or are there too few "
+         "counts per bin to see a gap at all?"),
         ("amplitude_time", "amplitude", ("stable", "drifting", "abrupt_segments", "unclear"),
          "Right panel: is the amplitude stable over the recording, slowly drifting, or changing abruptly in some "
          "periods?"),
@@ -113,17 +125,19 @@ OBSERVATIONS = {
          "cross-correlogram) or the same unit (similar waveforms, refractory gap)?"),
     ],
     "pair": [
-        ("overlay", "overlay", ("similar", "different", "unclear"),
-         "On the shared axes, are source and target similar in waveform shape and amplitude?"),
-        ("ccg", "ccg_acg", ("refractory_clean", "contaminated", "short_latency_asymmetric_peak", "unclear"),
-         "Left panel, against the time-reversed control: is the cross-correlogram's ±2 ms zone clean, "
-         "contaminated, or is there a short-latency asymmetric peak?"),
-        ("amplitude_time", "amplitude_time", ("continuous_or_handoff", "separate", "unclear"),
-         "Do the two amplitudes continue into each other over time (overlapping, or one fading as the other "
-         "appears), or are they separate?"),
+        ("overlay", "overlay", ("similar", "same_shape_different_amplitude", "different", "unclear"),
+         "On the shared axes, are source and target similar in both waveform shape and amplitude, similar in shape "
+         "but clearly different in amplitude, or different in shape?"),
+        ("ccg", "ccg_acg", ("refractory_clean", "burst_peak_5_10ms", "contaminated", "zero_lag_peak", "unclear"),
+         "Left panel, against the time-reversed control: is the ±2 ms zone empty; empty with an asymmetric peak at "
+         "about 5-10 ms on one side; filled; or is there a sharp peak at or next to zero lag?"),
+        ("amplitude_time", "amplitude_time", ("continuous_or_handoff", "overlapping_same_level", "separate_levels",
+                                              "unclear"),
+         "Over time, does one amplitude continue into the other (one fading as the other appears), do both occupy "
+         "the same amplitude band at the same times, or do they sit at different amplitude levels?"),
         ("source_validity", None, ("valid", "noise_like", "unclear"),
-         "All images: is the source itself a plausible neuronal cluster? Judge this apart from whether it matches "
-         "the target."),
+         "All images and the source_ morphology measurements: is the source itself a plausible neuronal cluster "
+         "(a sharp, consistent spike)? Judge this apart from whether it matches the target."),
     ],
 }
 
@@ -131,11 +145,36 @@ OBSERVATIONS = {
 def load_skill(path=SKILL_V1):
     raw = Path(path).read_bytes()
     skill = json.loads(raw)
-    ids = [r["id"] for r in skill["rules"]]
+    gates = skill.get("gates", [])
+    ids = [r["id"] for r in skill["rules"] + gates]
     if len(set(ids)) != len(ids) or any(r["scope"] not in ("single", "pair", "both") or not r["text"].strip()
                                         for r in skill["rules"]):
         raise ValueError("Invalid skill rules")
+    for g in gates:
+        labels = {name: set(values) for name, _, values, _ in OBSERVATIONS.get(g["scope"], ())}
+        if (g["action"] not in ACTION_TEXT.get(g["scope"], ()) or g["otherwise"] not in ACTION_TEXT[g["scope"]]
+                or not g["requires"] or not g["text"].strip()
+                or any(f not in labels or not set(v) <= labels[f] for f, v in g["requires"].items())):
+            raise ValueError(f"Invalid skill gate {g.get('id')}")
     return skill, hashlib.sha256(raw).hexdigest()
+
+
+def apply_gates(skill, kind, answer, allowed):
+    """Replace an action that contradicts the model's own observation labels, as the skill's gates state.
+    A gate whose replacement is not offered in this request does not apply. Gates apply in skill order, each
+    to the action left by the previous ones (e.g. KEEP -> SPLIT -> DISCARD). The model's choice is kept."""
+    action, ids, failed = answer["action"], [], set()
+    for g in skill.get("gates", ()):
+        if g["scope"] != kind or action != g["action"] or g["otherwise"] not in allowed:
+            continue
+        miss = {f for f, labels in g["requires"].items() if f in answer and answer[f]["label"] not in labels}
+        if miss:
+            action, failed = g["otherwise"], failed | miss
+            ids.append(g["id"])
+    if not ids:
+        return answer
+    return dict(answer, action=action, gate=dict(id=">".join(ids), model_action=answer["action"],
+                                                 failed=sorted(failed)))
 
 
 def fields_for(kind, allowed):
@@ -147,6 +186,9 @@ def instructions_v2(contract, skill, kind, allowed):
     actions = [a for a in order if a in allowed]
     rules = [f"- [{r['id']}] {r['text']}" for r in skill["rules"] if r["scope"] in (kind, "both")]
     what = "a single-cluster judgement" if kind == "single" else "a pair judgement (source = smaller cluster)"
+    gates = [f"- [{g['id']}] {g['text']}" for g in skill.get("gates", ()) if g["scope"] == kind]
+    if gates:
+        rules += ["", "# Gates: the harness applies these to your own output labels", *gates]
     lines = [contract.rstrip(), "", f"# Domain skill ({skill['version']})", *rules, "",
              f"# This request: {what}", "Offered actions:", *[f"- {a}: {ACTION_TEXT[kind][a]}" for a in actions], "",
              "# Output fields, in this order"]
@@ -191,7 +233,7 @@ class SkillDecider:
 
     kind = "SKILL_MODEL_VIA_PROVIDER"
 
-    def __init__(self, provider, *, skill_path=SKILL_V1, contract_path=CONTRACT, numbers="default"):
+    def __init__(self, provider, *, skill_path=SKILL_V4, contract_path=CONTRACT, numbers="default"):
         self.provider, self.numbers = provider, numbers
         self.contract = Path(contract_path).read_text(encoding="utf-8")
         self.contract_sha256 = hashlib.sha256(self.contract.encode()).hexdigest()
@@ -225,7 +267,8 @@ class SkillDecider:
 
     def answer(self, content, allowed, *, folder):
         kind = "single" if content["schema_name"].startswith("curation_single") else "pair"
-        return check_answer(self.provider.respond(content, folder=folder), kind, allowed)
+        answer = check_answer(self.provider.respond(content, folder=folder), kind, allowed)
+        return apply_gates(self.skill, kind, answer, allowed)
 
     def decide(self, m, kind, cid, target, allowed, *, folder, sampling_rate):
         return self.answer(self.prepare(m, kind, cid, target, allowed, folder=folder, sampling_rate=sampling_rate),

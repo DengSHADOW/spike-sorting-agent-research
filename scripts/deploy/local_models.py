@@ -180,18 +180,25 @@ def serve_model(config, alias, port, dry_run):
     environment = os.environ.copy()
     environment.update(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1",
                        HF_HUB_DISABLE_IMPLICIT_TOKEN="1", VLLM_NO_USAGE_STATS="1")
+    # FlashInfer JIT-compiles its sampler at warm-up and failed on the H100 Pod (no ninja on PATH, system
+    # nvcc 12.8 vs cu130); the PyTorch sampler takes the same sampling parameters (2026-10-28).
+    environment.setdefault("VLLM_USE_FLASHINFER_SAMPLER", "0")
     os.execve(command[0], command, environment)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=["download", "verify", "status", "serve"])
-    parser.add_argument("model", nargs="?", choices=["all", "qwen27b", "gemma4"], default="all")
+    config = read_config()
+    parser.add_argument("model", nargs="?", choices=["all", *config["models"]], default="all")
     parser.add_argument("--port", type=int)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
-    config = read_config()
-    aliases = list(config["models"]) if args.model == "all" else [args.model]
+    # A retired model's weights were deleted on purpose; it stays in the config only as a record.
+    active = [a for a, m in config["models"].items() if not m.get("retired")]
+    if args.model != "all" and args.model not in active:
+        raise SystemExit(f"{args.model} is retired: {config['models'][args.model]['retired']}")
+    aliases = active if args.model == "all" else [args.model]
     if args.command == "download":
         download_models(config, aliases)
     elif args.command == "verify":

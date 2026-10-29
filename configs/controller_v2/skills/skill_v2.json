@@ -1,0 +1,263 @@
+{
+  "version": "skill_v2",
+  "parent": "skill_v1",
+  "status": "manual update after the first harness v2 rollout (Gemma-4-E4B-it, four development channels, 2026-10-28); unvalidated. The error analysis used all four channels, so no channel is a clean held-out set for this version.",
+  "source_keys": {
+    "J": "Jacob Bedke's 286 action reasons on four development channels (action_sheet.xlsx); development data only",
+    "V1": "skill v1 calibration hypotheses S1-S7 / P1-P5 (configs/curation/skill_v1.json)",
+    "P": "Petersen lab Phy manual curation protocol",
+    "K": "Kilosort merge/split logic (waveform similarity, CCG refractoriness, split veto)",
+    "S": "SpikeSorter visual guide (PMC5408889)",
+    "H": "Hill, Mehta and Kleinfeld 2011",
+    "R1": "Error analysis of the first harness v2 rollout: Gemma-4-E4B-it on CH3, CH20, CH30 and CH31, 2026-10-28 (output/harness_v2_build_20261028/PROGRESS.md). Over-merging into saturated targets, KEEP on contaminated clusters, zero-lag CCG peaks read as bursts."
+  },
+  "rules": [
+    {
+      "id": "S1",
+      "scope": "single",
+      "sources": [
+        "J"
+      ],
+      "added_in": "skill_v1",
+      "changed_in": null,
+      "text": "The goal is single neurons; there is no multi-unit category. A cluster that looks neuronal but has too much waveform variability or contamination to accept as one unit, and whose tree shows dense components, should be SPLIT until a single unit emerges. A cluster that is too broad, too contaminated for its spike count and unlikely to contain a valid unit should be DISCARDED. A small leftover at the end of splitting that resembles no other cluster should be DISCARDED."
+    },
+    {
+      "id": "S2",
+      "scope": "single",
+      "sources": [
+        "J",
+        "V1"
+      ],
+      "added_in": "skill_v1",
+      "changed_in": null,
+      "text": "Several dense components in the tree, each made of many subclusters, suggest several embedded units; split towards them. A large spike count, many leaves or a complex tree alone is not a reason to split. Stop splitting when the part in hand is a single unit."
+    },
+    {
+      "id": "S3",
+      "scope": "single",
+      "sources": [
+        "K",
+        "J",
+        "R1"
+      ],
+      "added_in": "skill_v1",
+      "changed_in": "skill_v2",
+      "text": "Before choosing SPLIT, look at the split preview. Different waveform families and a cross-correlogram without a refractory gap support splitting. Similar waveforms and a refractory gap in the cross-correlogram mean the two parts are one unit; do not split them apart only for that reason when the cluster's own autocorrelogram is clean. When the cluster's own ±2 ms zone is filled, the contamination is inside the parts, so SPLIT further (S4)."
+    },
+    {
+      "id": "S4",
+      "scope": "single",
+      "sources": [
+        "P",
+        "J",
+        "H",
+        "R1"
+      ],
+      "added_in": "skill_v1",
+      "changed_in": "skill_v2",
+      "text": "The refractory gap in the autocorrelogram is the primary unit criterion. Judge how much the ±2 ms zone is filled relative to the shoulders rather than applying a fixed number, and read contamination estimates relative to the spike count; hill_contamination 0.5 means saturated (at least half contaminated), not a borderline value. A cluster whose ±2 ms zone is partly or fully filled is not yet a single unit: SPLIT it while SPLIT is offered (gate G2), and judge KEEP or DISCARD only for clean parts or when SPLIT is no longer offered."
+    },
+    {
+      "id": "S5",
+      "scope": "single",
+      "sources": [
+        "P",
+        "J"
+      ],
+      "added_in": "skill_v1",
+      "changed_in": null,
+      "text": "Typical signs of noise: a triangular or strongly periodic autocorrelogram; waveforms that do not look like spikes; more than three phases, a monophasic shape, a slow descent to the trough, a start far from baseline or an overly broad waveform; units mixed with noise that cannot be split further."
+    },
+    {
+      "id": "S6",
+      "scope": "single",
+      "sources": [
+        "V1"
+      ],
+      "added_in": "skill_v1",
+      "changed_in": null,
+      "text": "Judge morphology as a whole. A biphasic or triphasic shape is compatible with a neuron but does not certify one; one extra bump or an endpoint away from zero is not enough to call noise; there is no universal width cutoff."
+    },
+    {
+      "id": "S7",
+      "scope": "single",
+      "sources": [
+        "V1"
+      ],
+      "added_in": "skill_v1",
+      "changed_in": null,
+      "text": "State the observed evidence for noise. Do not turn every uncertain cluster into KEEP or into SPLIT."
+    },
+    {
+      "id": "S8",
+      "scope": "single",
+      "sources": [
+        "P"
+      ],
+      "added_in": "skill_v1",
+      "changed_in": null,
+      "text": "Amplitude over time should be roughly stable; bursting units may vary. Inspect periods of abrupt change for noise."
+    },
+    {
+      "id": "S9",
+      "scope": "single",
+      "sources": [
+        "P",
+        "J"
+      ],
+      "added_in": "skill_v1",
+      "changed_in": null,
+      "text": "A low-rate cluster with an empty autocorrelogram should first be considered for merging; discard it only if it resembles no other cluster."
+    },
+    {
+      "id": "S10",
+      "scope": "single",
+      "sources": [
+        "V1"
+      ],
+      "added_in": "skill_v1",
+      "changed_in": null,
+      "text": "Spike count and leaf count are not labels. There is no fixed minimum cluster size and no target number of units; the leftover rule in S1 is the only size-related judgement."
+    },
+    {
+      "id": "P1",
+      "scope": "pair",
+      "sources": [
+        "J",
+        "K",
+        "P",
+        "R1"
+      ],
+      "added_in": "skill_v1",
+      "changed_in": "skill_v2",
+      "text": "MERGE needs all of: the same waveform shape, the same amplitude (one cluster about twice the other or more, see amplitude_ratio, is not the same unit even when the shapes match), an empty ±2 ms zone in the cross-correlogram, amplitudes that continue into each other or share one band over time, and no clear rise in violations after merging (isi_violation_increase). A null contamination_increase means the estimate is saturated, not that nothing changes. A high correlation is only the reason this pair was asked about."
+    },
+    {
+      "id": "P2",
+      "scope": "pair",
+      "sources": [
+        "S",
+        "P"
+      ],
+      "added_in": "skill_v1",
+      "changed_in": null,
+      "text": "Amplitudes that continue into each other over time, one cluster fading as the other appears, are strong evidence of one drifting neuron split into two clusters."
+    },
+    {
+      "id": "P3",
+      "scope": "pair",
+      "sources": [
+        "S",
+        "R1"
+      ],
+      "added_in": "skill_v1",
+      "changed_in": "skill_v2",
+      "text": "A peak at about 5-10 ms on one side of the cross-correlogram only, with the ±2 ms zone empty and a smaller second spike, indicates bursts of one unit and supports merging (label burst_peak_5_10ms). A sharp peak at or next to zero lag is not a burst: it fills the refractory zone and argues against merging (label zero_lag_peak; see ccg_zero_lag_ratio). A weak, symmetric cross-correlogram also argues against merging."
+    },
+    {
+      "id": "P4",
+      "scope": "pair",
+      "sources": [
+        "V1"
+      ],
+      "added_in": "skill_v1",
+      "changed_in": null,
+      "text": "DISCARD only on evidence that the source itself is noise. Small size, low correlation or not matching this target is not enough."
+    },
+    {
+      "id": "P5",
+      "scope": "pair",
+      "sources": [
+        "V1"
+      ],
+      "added_in": "skill_v1",
+      "changed_in": null,
+      "text": "NOT_MERGE does not certify that the source is clean."
+    },
+    {
+      "id": "P6",
+      "scope": "pair",
+      "sources": [
+        "V1"
+      ],
+      "added_in": "skill_v1",
+      "changed_in": null,
+      "text": "Judge the source's validity the same way whichever target it is compared with. Never merge or discard to reach a cluster count."
+    },
+    {
+      "id": "P7",
+      "scope": "pair",
+      "sources": [
+        "P",
+        "J",
+        "R1"
+      ],
+      "added_in": "skill_v1",
+      "changed_in": "skill_v2",
+      "text": "Identical waveforms with a filled ±2 ms zone in the cross-correlogram are not a reason to DISCARD the source; choose NOT_MERGE. Merging and then splitting does not separate them here, because SPLIT only undoes the last merge."
+    },
+    {
+      "id": "P8",
+      "scope": "pair",
+      "sources": [
+        "R1",
+        "J"
+      ],
+      "added_in": "skill_v2",
+      "changed_in": null,
+      "text": "A target that is itself heavily contaminated (target_contamination saturated at 0.5, a filled ±2 ms zone in the merged autocorrelogram) is a mixture still to be split, not a destination; do not merge small clusters into it on waveform similarity alone."
+    }
+  ],
+  "gates": [
+    {
+      "id": "G1",
+      "scope": "pair",
+      "action": "MERGE",
+      "otherwise": "NOT_MERGE",
+      "sources": [
+        "R1",
+        "J",
+        "K"
+      ],
+      "added_in": "skill_v2",
+      "requires": {
+        "overlay": [
+          "similar"
+        ],
+        "ccg": [
+          "refractory_clean",
+          "burst_peak_5_10ms"
+        ],
+        "amplitude_time": [
+          "continuous_or_handoff",
+          "overlapping_same_level"
+        ],
+        "source_validity": [
+          "valid"
+        ]
+      },
+      "text": "MERGE stands only if your labels are overlay similar, ccg refractory_clean or burst_peak_5_10ms, amplitude_time continuous_or_handoff or overlapping_same_level, and source_validity valid; otherwise the harness records NOT_MERGE."
+    },
+    {
+      "id": "G2",
+      "scope": "single",
+      "action": "KEEP",
+      "otherwise": "SPLIT",
+      "sources": [
+        "R1",
+        "J",
+        "P"
+      ],
+      "added_in": "skill_v2",
+      "requires": {
+        "refractory": [
+          "clean",
+          "noise_like",
+          "unclear"
+        ]
+      },
+      "text": "When SPLIT is offered, KEEP stands only if your refractory label is not partly_contaminated or absent; otherwise the harness records SPLIT."
+    }
+  ]
+}

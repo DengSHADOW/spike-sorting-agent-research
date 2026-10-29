@@ -105,7 +105,7 @@ def main(argv=None):
     p.add_argument("--max-rounds", type=int)
     p.add_argument("--max-seconds", type=float)
     p.add_argument("--max-total-tokens", type=int)
-    p.add_argument("--skill", default=str(dec.SKILL_V1))
+    p.add_argument("--skill", default=str(dec.SKILL_V4))
     p.add_argument("--numbers", choices=("default", "full"), default="default")
     p.add_argument("--scripted-offline", action="store_true")
     args = p.parse_args(argv)
@@ -138,10 +138,15 @@ def main(argv=None):
         error = repr(exc)
     evaluation = {"completed": "completed", "stopped_limit": "stopped_state"}.get(c.status)
     scores = ref.score(c.manager.assigns.copy(), data) if evaluation else None
-    if hashes != code_hashes(args.skill) or existing.sha(ROOT / row["mat_path"]) != row["mat_sha256"]:
-        raise RuntimeError("Frozen code, skill or MAT changed during the run")
+    # A change of frozen code, skill or MAT invalidates the run, but its record is still written.
+    changed = sorted(k for k, v in code_hashes(args.skill).items() if hashes.get(k) != v)
+    if existing.sha(ROOT / row["mat_path"]) != row["mat_sha256"]:
+        changed.append(row["mat_path"])
+    if changed:
+        error = error or "Frozen code, skill or MAT changed during the run"
+        evaluation = None
     result = dict(status=c.status, evaluation=evaluation, error=error, decisions=c.calls, rounds=c.round,
-                  seconds=monotonic() - started, provider=provider.stats(), scores=scores)
+                  seconds=monotonic() - started, provider=provider.stats(), scores=scores, changed_during_run=changed)
     (out / "result.json").write_text(json.dumps(result, indent=2, sort_keys=True, default=float), encoding="utf-8")
     report(out, result, manifest)
     print(f"{args.dataset} / {args.model}{' (SCRIPTED)' if args.scripted_offline else ''}: {c.status}, "
