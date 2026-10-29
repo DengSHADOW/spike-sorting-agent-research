@@ -1,0 +1,2 @@
+# Install after the project's execution dependencies. Pinned search engine; no LLM SDK extras needed.
+gepa==0.1.4

@@ -16,6 +16,7 @@ wheels/
 .venv-firebase/
 .venv-model-tools/
 .venv-vllm/
+.venv-feedback/
 
 # Firebase CLI state and authentication/debug output stay local.
 .firebase/

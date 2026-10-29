@@ -1,0 +1,15 @@
+{
+  "execution": "hosted_api.example.json",
+  "reflection": "hosted_api.example.json",
+  "proposal": "hosted_api.example.json",
+  "search": {
+    "max_proposals": 4,
+    "max_evaluations": 200,
+    "reflection_chunk_size": 2,
+    "minibatch_size": 2,
+    "seed": 0,
+    "min_gain": 0.0,
+    "max_regressions": 0
+  },
+  "max_updates_per_boundary": 10
+}

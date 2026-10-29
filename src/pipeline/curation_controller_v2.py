@@ -242,11 +242,13 @@ class RoundsController(CurationControllerV2):
     scored separately ('stopped_state'), never mixed with completed runs.
     """
 
-    def __init__(self, manager, dataset_id, output_root, *, parallel=1, final_sweep=True, max_rounds=None, **kw):
+    def __init__(self, manager, dataset_id, output_root, *, parallel=1, final_sweep=True, max_rounds=None,
+                 after_round=None, **kw):
         if type(parallel) is not int or parallel < 1 or (max_rounds is not None and (type(max_rounds) is not int
                                                                                     or max_rounds < 1)):
             raise ValueError("Invalid parallel or max_rounds")
         self.parallel, self.final_sweep, self.max_rounds = parallel, bool(final_sweep), max_rounds
+        self.after_round = after_round
         self.round, self.asked_pairs, self.vetoed = 0, set(), set()
         super().__init__(manager, dataset_id, output_root, **kw)
 
@@ -418,6 +420,8 @@ class RoundsController(CurationControllerV2):
                          state_sha256=self.state_hash())
                 self.ask_round(singles + pairs)
                 pending, fresh = self.execute_round(singles, pairs)
+                if self.after_round is not None:
+                    self.after_round(self)  # all prepared jobs finished; next round may load a new skill
             self.status = "completed"
         except LimitStop as exc:
             self.status = "stopped_limit"

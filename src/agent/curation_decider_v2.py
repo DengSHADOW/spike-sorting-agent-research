@@ -81,6 +81,7 @@ class ModelDecider:
 # ====================================================================== harness v2 (§3.7.5-3.7.7)
 # Contract + versioned skill + observation v2, and an output that records each image before the action.
 from src.agent import curation_observation_v2 as obs_v2
+from src.agent.skill_policy import load_skill as _load_skill
 
 CONTRACT = ROOT / "configs/controller_v2/contract.txt"
 SKILL_V1 = ROOT / "configs/controller_v2/skills/skill_v1.json"
@@ -129,13 +130,7 @@ OBSERVATIONS = {
 
 
 def load_skill(path=SKILL_V1):
-    raw = Path(path).read_bytes()
-    skill = json.loads(raw)
-    ids = [r["id"] for r in skill["rules"]]
-    if len(set(ids)) != len(ids) or any(r["scope"] not in ("single", "pair", "both") or not r["text"].strip()
-                                        for r in skill["rules"]):
-        raise ValueError("Invalid skill rules")
-    return skill, hashlib.sha256(raw).hexdigest()
+    return _load_skill(path)
 
 
 def fields_for(kind, allowed):
@@ -193,6 +188,7 @@ class SkillDecider:
 
     def __init__(self, provider, *, skill_path=SKILL_V1, contract_path=CONTRACT, numbers="default"):
         self.provider, self.numbers = provider, numbers
+        self.contract_path = Path(contract_path)
         self.contract = Path(contract_path).read_text(encoding="utf-8")
         self.contract_sha256 = hashlib.sha256(self.contract.encode()).hexdigest()
         self.skill, self.skill_sha256 = load_skill(skill_path)
@@ -221,11 +217,15 @@ class SkillDecider:
         write_json(folder / "request_content.json", dict(
             {k: v for k, v in content.items() if k != "images"}, images=info["images"], measurements=values,
             **self.describe()))
+        write_json(folder / "policy_snapshot.json", dict(contract=self.contract, skill=self.skill,
+                                                         **self.describe()))
         return content
 
     def answer(self, content, allowed, *, folder):
         kind = "single" if content["schema_name"].startswith("curation_single") else "pair"
-        return check_answer(self.provider.respond(content, folder=folder), kind, allowed)
+        answer = check_answer(self.provider.respond(content, folder=folder), kind, allowed)
+        write_json(folder / "answer.json", answer)
+        return answer
 
     def decide(self, m, kind, cid, target, allowed, *, folder, sampling_rate):
         return self.answer(self.prepare(m, kind, cid, target, allowed, folder=folder, sampling_rate=sampling_rate),

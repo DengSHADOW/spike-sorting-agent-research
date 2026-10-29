@@ -1,7 +1,7 @@
-"""Single-channel rollout of harness v2 with a local vLLM model (项目总文档 §3.7). First-round scope: no resume.
+"""Single-channel rollout of harness v2 with local vLLM or an explicit hosted API profile. No resume.
 
 Round-synchronous controller + observation v2 + frozen contract + versioned skill + observe-then-act output,
-answered by a model served by vLLM on this machine. The model sees only rendered observations; MAT expert
+answered through the selected provider. The model sees only rendered observations; MAT expert
 labels are read only by the scorer after the run. A run that hits a limit is scored separately as a
 "stopped_state" and must not be mixed with completed runs.
 
@@ -26,7 +26,9 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from scripts.analysis import run_annotated_offline_references as existing
 from src.agent import curation_decider_v2 as dec
+from src.agent import expert_simulation as sim
 from src.agent.vllm_provider import VllmProvider
+from src.agent.hosted_provider import HostedProvider
 from src.pipeline.curation_controller_v2 import RoundsController
 
 ref = existing.ref
@@ -36,6 +38,9 @@ FROZEN = ("src/agent/curation_observation_v2.py", "src/agent/curation_observatio
           "src/agent/curation_decider_v2.py", "src/agent/vllm_provider.py", "src/pipeline/curation_controller_v2.py",
           "src/pipeline/curation_engineering_v1.py", "src/cluster/manager.py", "configs/controller_v2/contract.txt",
           "configs/controller_v2/models.json", "scripts/run/run_local_rollout.py")
+FROZEN += ("src/agent/hosted_provider.py", "src/agent/skill_policy.py")
+FROZEN += ("src/agent/expert_simulation.py", "src/agent/feedback_runtime.py")
+FROZEN += ("src/agent/ace_gepa.py", "src/agent/feedback_session.py", "src/agent/feedback_optimization.py")
 
 
 def sha(path):
@@ -43,7 +48,7 @@ def sha(path):
 
 
 def code_hashes(skill):
-    return {**{p: sha(ROOT / p) for p in FROZEN}, str(Path(skill).resolve().relative_to(ROOT)): sha(skill)}
+    return {**{p: sha(ROOT / p) for p in FROZEN}, str(Path(skill).resolve()): sha(skill)}
 
 
 class ScriptedServer:
@@ -76,10 +81,16 @@ def report(out, result, manifest):
     s = result["scores"]
     lines = [f"# harness v2 rollout: {manifest['model_alias']} on {manifest['dataset']['dataset_id']}", "",
              "**SCRIPTED OFFLINE CHECK: no model was called.**" if manifest["scripted_offline"] else
-             f"Model `{manifest['profile']['served_name']}`, vLLM {manifest['server'].get('version')}.", "",
+             f"Model `{manifest['profile'].get('served_name', manifest['profile'].get('model'))}`, "
+             f"provider {manifest['provider_kind']}.", "",
              f"- Status: {result['status']}; evaluation: {result['evaluation'] or 'not scored'}",
              f"- Decisions: {result['decisions']} in {result['rounds']} rounds; parallel {manifest['parallel']}",
              f"- Provider: {result['provider']}", f"- Seconds: {result['seconds']:.0f}"]
+    if result.get("simulation"):
+        o = result["simulation"]
+        lines += [f"- Simulated expert (teacher forcing): agreement {o['overall']['correct']}/{o['overall']['n']} "
+                  f"labeled steps of {o['steps']}; provenance {o['provenance_counts']}",
+                  f"- End state vs expert replay: {o.get('end_state_vs_expert_replay')}"]
     if s:
         o = s["one_to_one"]
         lines += [f"- One-to-one full output: P {o['full_output']['precision']:.4f}, R {o['full_output']['recall']:.4f}, "
@@ -94,7 +105,10 @@ def report(out, result, manifest):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--model", required=True, choices=sorted(json.loads(PROFILES.read_text())["models"]))
+    model = p.add_mutually_exclusive_group(required=True)
+    model.add_argument("--model", choices=sorted(json.loads(PROFILES.read_text())["models"]))
+    model.add_argument("--api-profile", help="Hosted profile JSON (backend=hosted); credentials from environment")
+    p.add_argument("--max-api-calls", type=int, help="Required request cap for hosted APIs")
     p.add_argument("--dataset", default=DEFAULT_DATASET)
     p.add_argument("--output-root", required=True)
     p.add_argument("--base-url", default="http://127.0.0.1:8000")
@@ -108,32 +122,78 @@ def main(argv=None):
     p.add_argument("--skill", default=str(dec.SKILL_V1))
     p.add_argument("--numbers", choices=("default", "full"), default="default")
     p.add_argument("--scripted-offline", action="store_true")
+    p.add_argument("--learning-session", help="ACE+GEPA session; activate skill only at round boundaries")
+    p.add_argument("--review-mode", choices=("pause", "poll"), default="pause")
+    p.add_argument("--flush-feedback-at-end", action="store_true")
+    p.add_argument("--simulated-expert", action="store_true",
+                   help="Teacher forcing from the recorded expert actions; the model still answers every step")
+    p.add_argument("--simulated-feedback", choices=("mismatch", "all"),
+                   help="With --learning-session: the simulated expert fills each round's reviews (no pause)")
+    p.add_argument("--sim-window", type=int, default=20, help="Sliding-window size for per-step agreement")
     args = p.parse_args(argv)
+    if args.api_profile and (args.scripted_offline or args.max_total_tokens is not None):
+        p.error("Hosted mode uses --max-api-calls and does not support --scripted-offline or --max-total-tokens")
+    if args.api_profile and (args.max_api_calls is None or args.max_api_calls < 1):
+        p.error("Hosted mode requires positive --max-api-calls")
+    if args.learning_session and args.scripted_offline:
+        p.error("Scripted rollout cannot trigger real learning providers; use the offline learning demo")
+    if args.simulated_feedback and not (args.learning_session and args.simulated_expert):
+        p.error("--simulated-feedback requires --learning-session and --simulated-expert")
+    learning_hook = None
+    if args.learning_session:
+        from src.agent.feedback_runtime import RoundLearningHook
+        learning_hook = RoundLearningHook(args.learning_session, pause=args.review_mode == "pause",
+                                          reviewer=sim.simulated_reviewer(args.simulated_feedback)
+                                          if args.simulated_feedback else None)
+        args.skill = str(learning_hook.session.active())
 
     out = ref.stage6.output_path(args.output_root)
     out.mkdir(parents=True, exist_ok=False)
     row = ref.stage6.selected_rows([args.dataset])[0]
     data = existing.load_data(row)
-    profile = json.loads(PROFILES.read_text())["models"][args.model]
-    provider = VllmProvider(profile, out / "ledger.jsonl", base_url=args.base_url,
+    if args.api_profile:
+        config = json.loads(Path(args.api_profile).read_text())
+        if config.get("backend") != "hosted":
+            raise ValueError("--api-profile requires backend=hosted")
+        profile = config["profile"]
+        provider = HostedProvider(profile, out / "ledger.jsonl", max_calls=args.max_api_calls)
+        server = dict(version=None, connection="hosted; compatibility not independently verified")
+        args.model = profile["model"]
+    else:
+        profile = json.loads(PROFILES.read_text())["models"][args.model]
+        provider = VllmProvider(profile, out / "ledger.jsonl", base_url=args.base_url,
                             max_total_tokens=args.max_total_tokens,
                             transport=ScriptedServer(profile) if args.scripted_offline else None)
-    server = provider.check()
+        server = provider.check()
+    if learning_hook:
+        learning_hook.check_execution_profile(provider)
     decider = dec.SkillDecider(provider, skill_path=args.skill, numbers=args.numbers)
+    oracle = sim.ExpertOracle.for_dataset(args.dataset, data, ref.fresh) if args.simulated_expert else None
+    if oracle:
+        decider = sim.TeacherForcedDecider(decider, oracle)
     hashes = code_hashes(args.skill)
-    manifest = dict(run="harness-v2-local-rollout", model_alias=args.model, profile=profile, server=server,
+    manifest = dict(run="harness-v2-rollout", model_alias=args.model, profile=profile, server=server,
+                    provider_kind=provider.kind,
+                    learning_session=args.learning_session, review_mode=args.review_mode,
                     scripted_offline=args.scripted_offline, dataset=row, parallel=args.parallel,
                     code_hashes=hashes, argv=sys.argv[1:] if argv is None else list(argv),
-                    labels="MAT expert labels are read only by the scorer after the run", **decider.describe())
+                    simulated_feedback=args.simulated_feedback,
+                    labels="Recorded expert actions drive the simulated expert (teacher forcing); MAT terminal labels "
+                           "are read only by the scorer and the unified-replay check" if oracle else
+                           "MAT expert labels are read only by the scorer after the run", **decider.describe())
     (out / "run_manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
     c = RoundsController(ref.fresh(data), args.dataset, out / "rollout", decider=decider, sampling_rate=data["Fs"],
                          k=args.k, parallel=args.parallel, final_sweep=not args.no_final_sweep,
                          max_rounds=args.max_rounds, max_decisions=args.max_decisions, max_seconds=args.max_seconds,
+                         after_round=learning_hook,
                          manifest=dict(model_alias=args.model, scripted_offline=args.scripted_offline,
+                                       run_profile=manifest,
                                        **decider.describe()))
     started, error = monotonic(), None
     try:
         c.run()
+        if learning_hook and args.flush_feedback_at_end and c.status == "completed":
+            learning_hook.update(c, flush=True)
     except Exception as exc:  # recorded, not hidden; the state at the error is not scored
         error = repr(exc)
     evaluation = {"completed": "completed", "stopped_limit": "stopped_state"}.get(c.status)
@@ -142,6 +202,10 @@ def main(argv=None):
         raise RuntimeError("Frozen code, skill or MAT changed during the run")
     result = dict(status=c.status, evaluation=evaluation, error=error, decisions=c.calls, rounds=c.round,
                   seconds=monotonic() - started, provider=provider.stats(), scores=scores)
+    if oracle:
+        summary, _ = sim.summarize(c.out, window=args.sim_window, final=c.manager.assigns, oracle=oracle)
+        (out / "simulation_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+        result["simulation"] = {k: v for k, v in summary.items() if k != "sliding_window"}
     (out / "result.json").write_text(json.dumps(result, indent=2, sort_keys=True, default=float), encoding="utf-8")
     report(out, result, manifest)
     print(f"{args.dataset} / {args.model}{' (SCRIPTED)' if args.scripted_offline else ''}: {c.status}, "
