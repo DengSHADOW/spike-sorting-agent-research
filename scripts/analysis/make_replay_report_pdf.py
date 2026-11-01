@@ -72,7 +72,7 @@ METHODS = [
              "action."),
 ]
 OBSERVATIONS = [
-    "Ours is the highest in every setting. Its gain over simple context comes mostly from DISCARD questions.",
+    "Ours is the highest in every setting. Its gain over the long-context agent comes mostly from DISCARD questions.",
     "The learned rules are mostly one firing-rate threshold (about 1-2 Hz). The curves jump when the first rule is "
     "accepted (around question 8-10) and then stay high.",
     "Transfer CH31 ↔ CH3: ours transferred beats ours learned from scratch on the target by about 3 questions "
@@ -91,11 +91,10 @@ CAVEATS = [
     "SpikeAgent ran under the older protocol (KEEP offered), scored on the questions shared with the other methods.",
 ]
 FIGURES = [
-    "Panels a-d: online learning within one channel, CH30, CH20, CH31 and CH3 (CH31 and CH3 are also the transfer "
-    "sources). All four methods are drawn as curves (accuracy over the last 15 steps, mean of 3 seeds, band = "
-    "±1 s.e.).",
-    "Panels e-f: transfer CH31 → CH3 and CH3 → CH31, four bars (SpikeAgent, Base agent, Long-context "
-    "agent, Ours). The two 'with_scratch' versions add a fifth bar, ours learned on the target channel itself.",
+    "The figures follow on the next pages, each with its caption: a-d online learning on CH30, CH20, CH31 and CH3 "
+    "(all four methods as curves, mean of 3 seeds, band = \u00b11 s.e.); e-f transfer CH31 \u2192 CH3 and CH3 \u2192 CH31 "
+    "with four bars; e\u2032-f\u2032 the same with a fifth bar, ours learned on the target channel itself; g the "
+    "running-time table.",
 ]
 
 
@@ -178,6 +177,68 @@ class Writer:
         self.fig = None
 
 
+def figure_pages(pdf, plt, ctx):
+    """Letter pages with two panels each, every panel drawn in place with its caption."""
+    numbers, common = ctx["numbers"], ctx["common"]
+    pct = lambda key: f"{100 * numbers[key]['accuracy']:.1f}%"
+
+    def online_caption(letter, c):
+        return (f"Figure {letter}. Online learning on {c.upper()}. Accuracy over the last {F.WINDOW} steps as the agent "
+                f"works through Jacob's {len(common[c])} edits in his order (mean of 3 seeds; shaded band \u00b11 "
+                f"standard error). The learning methods see Jacob's action and reason after every step. Overall "
+                f"accuracy: Ours {pct(f'{c}:ours')}, Long-context agent {pct(f'{c}:context')}, Base agent "
+                f"{pct(f'{c}:base')}, SpikeAgent {pct(f'{c}:spikeagent')}.")
+
+    def transfer_caption(letter, src, tgt, scratch):
+        f, s, t = f"{src}>{tgt}", src.upper(), tgt.upper()
+        text = (f"Figure {letter}. Transfer {s} \u2192 {t}. The agent learns on {s}; its rules and the {s} decisions are "
+                f"then frozen and it answers all {len(common[tgt])} {t} steps with no further learning. Bars: mean "
+                f"accuracy over 3 seeds; whiskers \u00b11 standard error. Base agent and SpikeAgent never learn.")
+        if scratch:
+            d = 100 * (numbers[f"{f}:ours"]["accuracy"] - numbers[f"{f}:scratch"]["accuracy"])
+            text += (f" The fifth bar is ours learning on {t} itself from scratch ({pct(f'{f}:scratch')}); the "
+                     f"transferred agent is {d:.1f} points higher.")
+        return text
+
+    timing_caption = ("Figure g. Running time per step. Testing with learning off costs about 3 s per step for every "
+                      "LLM agent (3-4 minutes per channel with 4 steps in flight); the expert's decisions in the prompt "
+                      "add no time because the answer is about 76 tokens and the 5 images dominate. Learning raises "
+                      "the cost to 12.9 s per step (4.6x), almost all of it the evaluator re-answering past steps to "
+                      "verify candidate rules (about 10 calls per step), not the proposer (one call per 8 steps). "
+                      "SpikeAgent is about 15x slower (4-5 sequential calls per step) and not more accurate. Latency: "
+                      "request to answer for one step, median and mean over steps and seeds; wall-clock: run time "
+                      "divided by steps.")
+
+    pages = [[("online", "ch30", "a"), ("online", "ch20", "b")],
+             [("online", "ch31", "c"), ("online", "ch3", "d")],
+             [("transfer", ("ch31", "ch3"), "e"), ("transfer", ("ch3", "ch31"), "f")],
+             [("transfer_scratch", ("ch31", "ch3"), "e\u2032"), ("transfer_scratch", ("ch3", "ch31"), "f\u2032")],
+             [("timing", None, "g")]]
+    block, ax_h, ax_w, head = 4.75, 2.7, 5.0, .65
+    for page in pages:
+        fig = plt.figure(figsize=(PAGE_W, PAGE_H))
+        for i, (kind, arg, letter) in enumerate(page):
+            top = PAGE_H - TOP - i * block
+            if kind == "timing":
+                w_, h_ = 6.9, 2.6
+            else:
+                w_, h_ = ax_w, ax_h
+            ax = fig.add_axes([(PAGE_W - w_) / 2 / PAGE_W, (top - head - h_) / PAGE_H, w_ / PAGE_W, h_ / PAGE_H])
+            if kind == "online":
+                F.draw_online(ax, ctx, arg, letter)
+                cap, below = online_caption(letter, arg), .55
+            elif kind == "timing":
+                F.draw_timing(ax, ctx, letter)
+                cap, below = timing_caption, .15
+            else:
+                F.draw_transfer(ax, ctx, *arg, letter, with_scratch=(kind == "transfer_scratch"))
+                cap, below = transfer_caption(letter, *arg, kind == "transfer_scratch"), .7
+            fig.text(LEFT / PAGE_W, (top - head - h_ - below) / PAGE_H, "\n".join(textwrap.wrap(cap, 118)),
+                     fontsize=9, color=F.INK, va="top", linespacing=1.35)
+        pdf.savefig(fig)
+        plt.close(fig)
+
+
 def cell(numbers, key, bold=False):
     r = numbers[key]
     se = f" ± {100 * r['se']:.1f}" if r["se"] is not None else ""
@@ -190,7 +251,8 @@ def main():
     p.add_argument("--spikeagent-seeds", default=str(F.SA_SEEDS))
     p.add_argument("--preview-dir", help="also save each text page as PNG here, for checking the layout")
     args = p.parse_args()
-    figures, numbers = F.build(args.spikeagent_seeds)
+    ctx = F.prepare(args.spikeagent_seeds)
+    numbers = ctx["numbers"]
 
     import matplotlib.pyplot as plt
     from matplotlib.backends.backend_pdf import PdfPages
@@ -243,10 +305,7 @@ def main():
                "seeds 1-2). Figures: scripts/analysis/plot_replay_final_figures.py; this PDF: "
                "scripts/analysis/make_replay_report_pdf.py.", size=9, color=F.INK2, after=0)
         w.close()
-        for i, (name, fig) in enumerate(figures, 1):
-            fig.text(.988, .988, f"Figure {i}", ha="right", va="top", fontsize=12, color=F.INK2)
-            pdf.savefig(fig)
-            plt.close(fig)
+        figure_pages(pdf, plt, ctx)
     print(out)
 
 

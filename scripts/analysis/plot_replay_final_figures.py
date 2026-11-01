@@ -132,15 +132,15 @@ def timing_rows(sa_seeds=SA_SEEDS):
     return rows
 
 
-def build(sa_seeds=SA_SEEDS):
-    """([(name, matplotlib figure)], numbers) of the six figures; make_replay_report_pdf.py uses it too."""
+def prepare(sa_seeds=SA_SEEDS):
+    """Load every run, score it on the questions all runs of a channel share, and set the plot style.
+    Returns the context the draw_* functions use (steps, common questions, numbers)."""
     table = runs_table(Path(sa_seeds))
     steps = {(f, m): [load_steps(r) for r in rs] for (f, m), rs in table.items()}
     for (f, m), rs in table.items():
         for r, s in zip(rs, steps[(f, m)]):
             if not s:
                 raise SystemExit(f"no recorded expert steps in {r}")
-    # score every run of a channel on the questions all of them share
     common = {}
     for c in CHANNELS:
         sets = [set(s) for (f, m), ss in steps.items() if target(f) == c for s in ss]
@@ -154,82 +154,79 @@ def build(sa_seeds=SA_SEEDS):
                                    for s in ss], accuracy=mean, se=se, runs=[str(r) for r in table[(f, m)]],
                                    false_discard=[sum(s[k][2] == "DISCARD" and s[k][1] != "DISCARD" for k in keys)
                                                   for s in ss])
-
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from matplotlib.lines import Line2D
     plt.rcParams.update({"font.size": 9, "axes.titlesize": 10, "axes.labelsize": 9.5, "xtick.labelsize": 8.5,
                          "ytick.labelsize": 8.5, "legend.fontsize": 8.5, "axes.edgecolor": INK, "axes.linewidth": .8,
                          "axes.labelcolor": INK, "xtick.color": INK, "ytick.color": INK, "text.color": INK,
                          "pdf.fonttype": 42, "font.family": "DejaVu Sans"})
-    pct = matplotlib.ticker.PercentFormatter(1, decimals=0)
-    foot = f"Shaded bands and whiskers: ±1 standard error over 3 seeds. Curves: accuracy over the last {WINDOW} steps."
-    figures = []
+    return dict(table=table, steps=steps, common=common, numbers=numbers, sa_seeds=sa_seeds)
 
-    def panel_title(ax, letter, text):
-        ax.set_title(text, loc="left", x=.045, fontsize=10)
-        ax.text(-.04 if ax.axison else 0, 1.0, letter, transform=ax.transAxes, fontsize=11, fontweight="bold",
-                va="bottom", ha="left")
 
-    def legend_top(fig, methods):
-        fig.legend([Line2D([], [], color=COLOR[m], lw=2) for m in methods], [NAME[m] for m in methods],
-                   loc="upper center", ncol=len(methods), frameon=False, handlelength=1.6, columnspacing=1.3,
-                   bbox_to_anchor=(.5, 1.0))
+def panel_title(ax, letter, text):
+    ax.text(-.02, 1.03, letter, transform=ax.transAxes, fontsize=11, fontweight="bold", va="bottom", ha="right")
+    ax.text(0, 1.03, text, transform=ax.transAxes, fontsize=10, va="bottom", ha="left")
 
-    for letter, c in zip("abcd", CHANNELS):
-        keys = common[c]
-        n = len(keys)
-        fig, ax = plt.subplots(figsize=(5.2, 3.9))
-        x = range(1, n + 1)
-        for m in ("spikeagent", "base", "context", "ours"):
-            curves = [window([s[k][0] for k in keys]) for s in steps[(c, m)]]
-            mean = [sum(cv[i] for cv in curves) / len(curves) for i in range(n)]
-            se = [mean_se([cv[i] for cv in curves])[1] or 0 for i in range(n)]
-            ax.fill_between(x, [a - b for a, b in zip(mean, se)], [a + b for a, b in zip(mean, se)],
-                            color=COLOR[m], alpha=.18, lw=0)
-            ax.plot(x, mean, color=COLOR[m], lw=1.8)
-        ax.set(xlim=(1, n), ylim=(0, 1.0), xlabel="Steps", ylabel="Accuracy (agreement with the expert)")
-        ax.set_xticks([1] + list(range(10, n + 1, 10)))
-        ax.yaxis.set_major_formatter(pct)
-        ax.set_yticks([0, .25, .5, .75, 1.0])
-        ax.spines[["top", "right"]].set_visible(False)
-        panel_title(ax, letter, f"Online learning ({c.upper()}, {n} steps)")
-        legend_top(fig, ("spikeagent", "base", "context", "ours"))
-        fig.text(.01, .01, foot, fontsize=6.5, color=INK2, va="bottom")
-        fig.subplots_adjust(left=.14, right=.97, top=.80, bottom=.2)
-        figures.append((f"online_{c}", fig))
 
-    for letter, (src, tgt) in zip("ef", TRANSFERS):
-        f = f"{src}>{tgt}"
-        for suffix, order in (("", ["spikeagent", "base", "context", "ours"]),
-                              ("_with_scratch", ["spikeagent", "base", "context", "ours", "scratch"])):
-            fig, ax = plt.subplots(figsize=(4.6 + .5 * (len(order) - 4), 3.9))
-            vals = [numbers[f"{f}:{m}"]["accuracy"] for m in order]
-            errs = [numbers[f"{f}:{m}"]["se"] or 0 for m in order]
-            ax.bar(range(len(order)), vals, width=.62, color=[COLOR[m] for m in order], yerr=errs,
-                   error_kw=dict(ecolor=INK, lw=1, capsize=3), zorder=2)
-            for i, (v, e) in enumerate(zip(vals, errs)):
-                ax.text(i, v + e + .02, f"{100 * v:.1f}", ha="center", va="bottom", fontsize=9, fontweight="bold")
-            top = min(1.0, (max(v + e for v, e in zip(vals, errs)) + .12) // .25 * .25 + .25)
-            ax.set(xlim=(-.6, len(order) - .4), ylim=(0, top), ylabel="Accuracy (agreement with the expert)")
-            ax.set_yticks([t / 4 for t in range(int(top * 4) + 1)])
-            ax.yaxis.set_major_formatter(pct)
-            ax.set_xticks(range(len(order)), [XLABEL[m] for m in order])
-            ax.spines[["top", "right"]].set_visible(False)
-            panel_title(ax, letter, f"Transfer to another dataset ({src.upper()} → {tgt.upper()})")
-            fig.text(.01, .01, f"Bars: mean accuracy on all {len(common[tgt])} {tgt.upper()} steps; whiskers: "
-                     "±1 standard error over 3 seeds.", fontsize=6.5, color=INK2, va="bottom")
-            fig.subplots_adjust(left=.17, right=.97, top=.86, bottom=.26)
-            figures.append((f"transfer_{src}_to_{tgt}{suffix}", fig))
-    # running time per step, as a table figure in the same style (panel g); drawn by hand for exact alignment
-    rows = timing_rows(sa_seeds)
-    fig, ax = plt.subplots(figsize=(7.2, 1.2 + .27 * len(rows) + 1.0))
+def legend_above(ax, methods, y=1.12):
+    from matplotlib.lines import Line2D
+    ax.legend([Line2D([], [], color=COLOR[m], lw=2) for m in methods], [NAME[m] for m in methods],
+              loc="lower center", bbox_to_anchor=(.5, y), ncol=len(methods), frameon=False, handlelength=1.6,
+              columnspacing=1.3)
+
+
+def draw_online(ax, ctx, c, letter):
+    """Panel: within-channel learning curves of the four methods on channel c."""
+    import matplotlib
+    steps, keys = ctx["steps"], ctx["common"][c]
+    n = len(keys)
+    x = range(1, n + 1)
+    for m in ("spikeagent", "base", "context", "ours"):
+        curves = [window([s[k][0] for k in keys]) for s in steps[(c, m)]]
+        mean = [sum(cv[i] for cv in curves) / len(curves) for i in range(n)]
+        se = [mean_se([cv[i] for cv in curves])[1] or 0 for i in range(n)]
+        ax.fill_between(x, [a - b for a, b in zip(mean, se)], [a + b for a, b in zip(mean, se)],
+                        color=COLOR[m], alpha=.18, lw=0)
+        ax.plot(x, mean, color=COLOR[m], lw=1.8)
+    ax.set(xlim=(1, n), ylim=(0, 1.0), xlabel="Steps", ylabel="Accuracy (agreement with the expert)")
+    ax.set_xticks([1] + list(range(10, n + 1, 10)))
+    ax.set_yticks([0, .25, .5, .75, 1.0])
+    ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1, decimals=0))
+    ax.spines[["top", "right"]].set_visible(False)
+    panel_title(ax, letter, f"Online learning ({c.upper()}, {n} steps)")
+    legend_above(ax, ("spikeagent", "base", "context", "ours"))
+
+
+def draw_transfer(ax, ctx, src, tgt, letter, with_scratch=False):
+    """Panel: accuracy on the target channel after learning on the source (bars, mean ± s.e.)."""
+    import matplotlib
+    numbers, f = ctx["numbers"], f"{src}>{tgt}"
+    order = ["spikeagent", "base", "context", "ours"] + (["scratch"] if with_scratch else [])
+    vals = [numbers[f"{f}:{m}"]["accuracy"] for m in order]
+    errs = [numbers[f"{f}:{m}"]["se"] or 0 for m in order]
+    ax.bar(range(len(order)), vals, width=.62, color=[COLOR[m] for m in order], yerr=errs,
+           error_kw=dict(ecolor=INK, lw=1, capsize=3), zorder=2)
+    for i, (v, e) in enumerate(zip(vals, errs)):
+        ax.text(i, v + e + .02, f"{100 * v:.1f}", ha="center", va="bottom", fontsize=9, fontweight="bold")
+    top = min(1.0, (max(v + e for v, e in zip(vals, errs)) + .12) // .25 * .25 + .25)
+    ax.set(xlim=(-.6, len(order) - .4), ylim=(0, top), ylabel="Accuracy (agreement with the expert)")
+    ax.set_yticks([t / 4 for t in range(int(top * 4) + 1)])
+    ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1, decimals=0))
+    ax.set_xticks(range(len(order)), [XLABEL[m] for m in order])
+    ax.spines[["top", "right"]].set_visible(False)
+    panel_title(ax, letter, f"Transfer to another dataset ({src.upper()} → {tgt.upper()})")
+
+
+def draw_timing(ax, ctx, letter):
+    """Panel: the running-time table, drawn by hand in axes coordinates."""
+    import matplotlib.pyplot as plt
+    rows = timing_rows(ctx["sa_seeds"])
     ax.axis("off")
     widths = [.3, .07, .1, .09, .1, .09, .08, .1, .07]
     xs = [sum(widths[:i]) for i in range(len(widths))]
-    y, rh = .97, .27 / (fig.get_figheight()) * 1.0
-    rh = 1.0 / (len(rows) + 2.6)  # row height in axes units
+    rh = 1.0 / (len(rows) + 2.6)
+    y = .97
     ax.add_patch(plt.Rectangle((0, y - 1.9 * rh), 1, 1.9 * rh, color="#efefef", lw=0))
     for x, wdt, h in zip(xs, widths, TIMING_HEADER):
         ax.text(x + (.01 if wdt == .3 else wdt / 2), y - .06 * rh, h, ha="left" if wdt == .3 else "center", va="top",
@@ -241,18 +238,47 @@ def build(sa_seeds=SA_SEEDS):
                     va="center", fontsize=8)
         y -= rh
     ax.set(xlim=(0, 1), ylim=(0, 1))
-    panel_title(ax, "g", "Running time per step (Qwen3.5-27B, thinking off, 4 requests in flight, one H200/H100)")
-    import textwrap as _tw
-    foot = ("Testing (learning off): about 3 s per step for every LLM agent, 3-4 min per channel with 4 steps in flight; "
-            "the expert's decisions in the prompt add no time (answers are ~76 tokens, the 5 images dominate). "
-            "Learning on: 12.9 s per step, 4.6x frozen; the cost is the evaluator re-answering past steps to verify "
-            "candidate rules (~10 calls/step), not the proposer (1 call per 8 steps). SpikeAgent: ~15x slower (4-5 "
-            "sequential calls per step, ~400-token reports) and not more accurate. Latency = request to answer per "
-            "step (median / mean over steps and seeds); wall-clock = run time / steps.")
-    fig.text(.01, .01, "\n".join(_tw.wrap(foot, 150)), fontsize=6.5, color=INK2, va="bottom", linespacing=1.3)
+    panel_title(ax, letter, "Running time per step (Qwen3.5-27B, thinking off, 4 requests in flight, one H200/H100)")
+    return rows
+
+
+ONLINE_PANELS = tuple(zip("abcd", CHANNELS))
+TRANSFER_PANELS = tuple(zip("ef", TRANSFERS))
+FOOT_CURVE = f"Shaded bands: ±1 standard error over 3 seeds. Curves: accuracy over the last {WINDOW} steps."
+FOOT_TIMING = ("Testing (learning off): about 3 s per step for every LLM agent, 3-4 min per channel with 4 steps in "
+               "flight; the expert's decisions in the prompt add no time (answers are ~76 tokens, the 5 images "
+               "dominate). Learning on: 12.9 s per step, 4.6x frozen; the cost is the evaluator re-answering past "
+               "steps to verify candidate rules (~10 calls/step), not the proposer (1 call per 8 steps). SpikeAgent: "
+               "~15x slower (4-5 sequential calls per step, ~400-token reports) and not more accurate. Latency = "
+               "request to answer per step (median / mean over steps and seeds); wall-clock = run time / steps.")
+
+
+def build(sa_seeds=SA_SEEDS):
+    """([(name, standalone matplotlib figure)], numbers) for the figure files; the report embeds the same panels."""
+    import textwrap
+    import matplotlib.pyplot as plt
+    ctx = prepare(sa_seeds)
+    figures = []
+    for letter, c in ONLINE_PANELS:
+        fig, ax = plt.subplots(figsize=(5.2, 4.2))
+        draw_online(ax, ctx, c, letter)
+        fig.text(.01, .01, FOOT_CURVE, fontsize=6.5, color=INK2, va="bottom")
+        fig.subplots_adjust(left=.14, right=.97, top=.78, bottom=.19)
+        figures.append((f"online_{c}", fig))
+    for letter, (src, tgt) in TRANSFER_PANELS:
+        for suffix, ws in (("", False), ("_with_scratch", True)):
+            fig, ax = plt.subplots(figsize=(4.6 + .5 * ws, 3.9))
+            draw_transfer(ax, ctx, src, tgt, letter, ws)
+            fig.text(.01, .01, f"Bars: mean accuracy on all {len(ctx['common'][tgt])} {tgt.upper()} steps; whiskers: "
+                     "±1 standard error over 3 seeds.", fontsize=6.5, color=INK2, va="bottom")
+            fig.subplots_adjust(left=.17, right=.97, top=.86, bottom=.26)
+            figures.append((f"transfer_{src}_to_{tgt}{suffix}", fig))
+    fig, ax = plt.subplots(figsize=(7.2, 4.0))
+    draw_timing(ax, ctx, "g")
+    fig.text(.01, .01, "\n".join(textwrap.wrap(FOOT_TIMING, 150)), fontsize=6.5, color=INK2, va="bottom", linespacing=1.3)
     fig.subplots_adjust(left=.02, right=.98, top=.9, bottom=.3)
     figures.append(("running_time", fig))
-    return figures, numbers
+    return figures, ctx["numbers"]
 
 
 def main():
