@@ -24,27 +24,13 @@ CHANNELS = ("ch30", "ch20", "ch31", "ch3")
 TRANSFERS = (("ch31", "ch3"), ("ch3", "ch31"))
 WINDOW = 15
 
-# Colours: slots 1-3 of the dataviz reference palette (validated all-pairs, light mode); references in neutral ink.
-INK, INK2, GRID = "#0b0b0b", "#52514e", "#e4e3df"
-COLOR = dict(ours="#2a78d6", context="#eb6834", scratch="#1baf7a", base="#52514e", spikeagent="#8a8984")
-ONLINE_LABEL = dict(
-    ours="Ours: learned rules + Jacob's earlier decisions in this channel",
-    context="Simple context: Jacob's earlier decisions in this channel, no rules",
-    base="Base: zero-shot, never learns (overall accuracy)",
-    spikeagent="SpikeAgent: original SpikeAgent prompts, never learns (overall accuracy)",
-    discard="Always answer DISCARD (share of DISCARD questions, same window)",
-)
-
-
-def transfer_labels(src, tgt):
-    s, t = src.upper(), tgt.upper()
-    return dict(
-        base=f"Base\nzero-shot, nothing learned",
-        spikeagent=f"SpikeAgent\noriginal prompts, never learns",
-        context=f"Simple context, transferred\n{s} decisions in the prompt, frozen",
-        ours=f"Ours, transferred\n{s} rules + decisions, frozen",
-        scratch=f"Ours from scratch on {t}\nlearns on {t} itself, no transfer",
-    )
+# Colours and names follow the advisor's example figure (Slack, 2026-11-01).
+INK, INK2 = "#0b0b0b", "#52514e"
+COLOR = dict(spikeagent="#D4A62A", base="#8E8E8E", context="#D9703A", ours="#2F6EB8", scratch="#3BA27A")
+NAME = dict(spikeagent="SpikeAgent", base="Base agent", context="Long-context agent", ours="Ours",
+            scratch="Ours, learned on the target")
+XLABEL = dict(spikeagent="SpikeAgent", base="Base\nagent", context="Long-\ncontext\nagent", ours="Ours",
+              scratch="Ours,\nlearned on\nthe target")
 
 
 def read(path):
@@ -125,86 +111,69 @@ def build(sa_seeds=SA_SEEDS):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    plt.rcParams.update({"font.size": 13, "axes.titlesize": 16, "axes.labelsize": 14, "xtick.labelsize": 12,
-                         "ytick.labelsize": 12, "legend.fontsize": 11.5, "axes.edgecolor": INK2,
-                         "axes.labelcolor": INK, "xtick.color": INK2, "ytick.color": INK2, "text.color": INK,
+    from matplotlib.lines import Line2D
+    plt.rcParams.update({"font.size": 9, "axes.titlesize": 10, "axes.labelsize": 9.5, "xtick.labelsize": 8.5,
+                         "ytick.labelsize": 8.5, "legend.fontsize": 8.5, "axes.edgecolor": INK, "axes.linewidth": .8,
+                         "axes.labelcolor": INK, "xtick.color": INK, "ytick.color": INK, "text.color": INK,
                          "pdf.fonttype": 42, "font.family": "DejaVu Sans"})
-    n_sa = len(table[("ch30", "spikeagent")])
-    seeds = "3 seeds" if n_sa == 3 else f"3 seeds (SpikeAgent: {n_sa} seed{'s' if n_sa > 1 else ''})"
-    note = (f"Qwen3.5-27B, thinking off. Strict expert replay: first answer scored, before Jacob's action is revealed.\n"
-            f"Mean ± s.e. over {seeds}. KEEP and NOT_MERGE are not offered\n"
-            "(SpikeAgent answers with its own good/bad and merge/not-merge outputs).")
+    pct = matplotlib.ticker.PercentFormatter(1, decimals=0)
+    foot = f"Shaded bands and whiskers: ±1 standard error over 3 seeds. Curves: accuracy over the last {WINDOW} steps."
     figures = []
 
-    for c in CHANNELS:
+    def panel_title(ax, letter, text):
+        ax.set_title(text, loc="left", x=.045, fontsize=10)
+        ax.text(-.04, 1.0, letter, transform=ax.transAxes, fontsize=11, fontweight="bold", va="bottom", ha="left")
+
+    def legend_top(fig, methods):
+        fig.legend([Line2D([], [], color=COLOR[m], lw=2) for m in methods], [NAME[m] for m in methods],
+                   loc="upper center", ncol=len(methods), frameon=False, handlelength=1.6, columnspacing=1.3,
+                   bbox_to_anchor=(.5, 1.0))
+
+    for letter, c in zip("abcd", CHANNELS):
         keys = common[c]
         n = len(keys)
-        fig, ax = plt.subplots(figsize=(10, 7.4))
+        fig, ax = plt.subplots(figsize=(5.2, 3.9))
         x = range(1, n + 1)
-        tags = []
-        expert = [steps[(c, "base")][0][k][1] for k in keys]
-        ax.plot(x, window([a == "DISCARD" for a in expert]), color=INK2, lw=1.6, ls=(0, (1, 2.5)),
-                label=ONLINE_LABEL["discard"])
-        for m in ("base", "spikeagent"):
-            r = numbers[f"{c}:{m}"]
-            if r["se"]:
-                ax.axhspan(r["accuracy"] - r["se"], r["accuracy"] + r["se"], color=COLOR[m], alpha=.12, lw=0)
-            ax.axhline(r["accuracy"], color=COLOR[m], lw=2, ls="-" if m == "base" else (0, (6, 2, 1.5, 2)),
-                       label=ONLINE_LABEL[m])
-        for m in ("context", "ours"):
+        for m in ("spikeagent", "base", "context", "ours"):
             curves = [window([s[k][0] for k in keys]) for s in steps[(c, m)]]
             mean = [sum(cv[i] for cv in curves) / len(curves) for i in range(n)]
-            se = [mean_se([cv[i] for cv in curves])[1] for i in range(n)]
+            se = [mean_se([cv[i] for cv in curves])[1] or 0 for i in range(n)]
             ax.fill_between(x, [a - b for a, b in zip(mean, se)], [a + b for a, b in zip(mean, se)],
                             color=COLOR[m], alpha=.18, lw=0)
-            ax.plot(x, mean, color=COLOR[m], lw=2.4, label=ONLINE_LABEL[m])
-            tags.append([mean[-1], "Ours" if m == "ours" else "Simple context", INK])
-        for m, name in (("base", "Base"), ("spikeagent", "SpikeAgent")):
-            tags.append([numbers[f"{c}:{m}"]["accuracy"], name, INK2])
-        tags.sort()
-        for lower, upper in zip(tags, tags[1:]):  # keep the end labels at least one text line apart
-            upper[0] = max(upper[0], lower[0] + .045)
-        for y, name, color in tags:
-            ax.text(n + .6, y, name, color=color, fontsize=12, va="center")
-        ax.set(xlim=(1, n), ylim=(0, 1.02), xlabel=f"Jacob's n-th edit in {c.upper()} (question index, {n} questions)",
-               ylabel=f"Accuracy over the last {WINDOW} questions")
-        ax.set_title(f"{c.upper()}: learning within one channel", loc="left", fontweight="bold")
-        ax.grid(axis="y", color=GRID, lw=.8)
+            ax.plot(x, mean, color=COLOR[m], lw=1.8)
+        ax.set(xlim=(1, n), ylim=(0, 1.0), xlabel="Steps", ylabel="Accuracy (agreement with the expert)")
+        ax.set_xticks([1] + list(range(10, n + 1, 10)))
+        ax.yaxis.set_major_formatter(pct)
+        ax.set_yticks([0, .25, .5, .75, 1.0])
         ax.spines[["top", "right"]].set_visible(False)
-        ax.legend(loc="upper center", bbox_to_anchor=(.5, -.13), frameon=False, ncol=1)
-        fig.text(.012, .012, note, fontsize=10.5, color=INK2, va="bottom")
-        fig.subplots_adjust(left=.09, right=.86, top=.93, bottom=.36)
+        panel_title(ax, letter, f"Online learning ({c.upper()}, {n} steps)")
+        legend_top(fig, ("spikeagent", "base", "context", "ours"))
+        fig.text(.01, .01, foot, fontsize=6.5, color=INK2, va="bottom")
+        fig.subplots_adjust(left=.14, right=.97, top=.80, bottom=.2)
         figures.append((f"online_{c}", fig))
 
-    for src, tgt in TRANSFERS:
+    for letter, (src, tgt) in zip("ef", TRANSFERS):
         f = f"{src}>{tgt}"
-        labels = transfer_labels(src, tgt)
-        order = ["base", "spikeagent", "context", "ours", "scratch"]
-        fig, ax = plt.subplots(figsize=(10, 6.6))
-        n = len(common[tgt])
-        for y, m in enumerate(reversed(order)):
-            r = numbers[f"{f}:{m}"]
-            ax.barh(y, r["accuracy"], height=.62, color=COLOR[m], alpha=.9 if m in ("ours", "context", "scratch") else .55,
-                    xerr=r["se"], error_kw=dict(ecolor=INK, lw=1.4, capsize=5), zorder=2)
-            for v in r["per_seed_correct"]:
-                ax.plot(v / n, y, "o", ms=6, mfc="white", mec=INK, mew=1.2, zorder=3)
-            se = f" ± {100 * r['se']:.1f}" if r["se"] is not None else " (1 seed)"
-            ax.text(1.015, y, f"{100 * r['accuracy']:.1f}%{se}", va="center", fontsize=12.5)
-        share = sum(steps[(f, "base")][0][k][1] == "DISCARD" for k in common[tgt]) / n
-        ax.axvline(share, color=INK2, lw=1.6, ls=(0, (1, 2.5)), zorder=1)
-        ax.text(share, len(order) - .35, f"always DISCARD = {100 * share:.0f}%", color=INK2, fontsize=11, ha="center")
-        ax.set_yticks(range(len(order)), [labels[m] for m in reversed(order)])
-        ax.set(xlim=(0, 1), ylim=(-.6, len(order) - .1),
-               xlabel=f"Accuracy on all {n} {tgt.upper()} questions (overall, no window)")
-        fig.suptitle(f"Transfer {src.upper()} → {tgt.upper()}: learn on {src.upper()}, freeze, test on {tgt.upper()}",
-                     x=.012, ha="left", fontsize=16, fontweight="bold")
-        ax.xaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1))
-        ax.grid(axis="x", color=GRID, lw=.8, zorder=0)
-        ax.spines[["top", "right"]].set_visible(False)
-        fig.text(.012, .012, note + "\nBars: mean; whiskers: s.e.; circles: individual seeds.", fontsize=10.5,
-                 color=INK2, va="bottom")
-        fig.subplots_adjust(left=.36, right=.86, top=.92, bottom=.25)
-        figures.append((f"transfer_{src}_to_{tgt}", fig))
+        for suffix, order in (("", ["spikeagent", "base", "context", "ours"]),
+                              ("_with_scratch", ["spikeagent", "base", "context", "ours", "scratch"])):
+            fig, ax = plt.subplots(figsize=(4.6 + .5 * (len(order) - 4), 3.9))
+            vals = [numbers[f"{f}:{m}"]["accuracy"] for m in order]
+            errs = [numbers[f"{f}:{m}"]["se"] or 0 for m in order]
+            ax.bar(range(len(order)), vals, width=.62, color=[COLOR[m] for m in order], yerr=errs,
+                   error_kw=dict(ecolor=INK, lw=1, capsize=3), zorder=2)
+            for i, (v, e) in enumerate(zip(vals, errs)):
+                ax.text(i, v + e + .02, f"{100 * v:.1f}", ha="center", va="bottom", fontsize=9, fontweight="bold")
+            top = min(1.0, (max(v + e for v, e in zip(vals, errs)) + .12) // .25 * .25 + .25)
+            ax.set(xlim=(-.6, len(order) - .4), ylim=(0, top), ylabel="Accuracy (agreement with the expert)")
+            ax.set_yticks([t / 4 for t in range(int(top * 4) + 1)])
+            ax.yaxis.set_major_formatter(pct)
+            ax.set_xticks(range(len(order)), [XLABEL[m] for m in order])
+            ax.spines[["top", "right"]].set_visible(False)
+            panel_title(ax, letter, f"Transfer to another dataset ({src.upper()} → {tgt.upper()})")
+            fig.text(.01, .01, f"Bars: mean accuracy on all {len(common[tgt])} {tgt.upper()} steps; whiskers: "
+                     "±1 standard error over 3 seeds.", fontsize=6.5, color=INK2, va="bottom")
+            fig.subplots_adjust(left=.17, right=.97, top=.86, bottom=.26)
+            figures.append((f"transfer_{src}_to_{tgt}{suffix}", fig))
     return figures, numbers
 
 

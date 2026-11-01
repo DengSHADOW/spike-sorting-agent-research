@@ -8,7 +8,9 @@ The figures and numbers come from plot_replay_final_figures.build(); the text pa
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
+import statistics
 import sys
 import textwrap
 
@@ -30,28 +32,42 @@ SETUP = [
              "now, and steps with only one possible action are executed without asking. SpikeAgent is the "
              "exception: it answers with its own good/bad and merge/not-merge outputs and is scored on the same "
              "questions."),
-    ("Runs", "Three seeds per method (same questions, different sampling seeds); the figures show mean ± "
-             "standard error over seeds. SpikeAgent seed 0 is from 2026-10-29; seeds 1 and 2 were run on "
-             "2026-11-01 with identical settings."),
-    ("Scores", "Learning-curve figures: accuracy over the last 15 questions (fewer at the start). Transfer figures "
-             "and the tables below: accuracy over all questions of the channel."),
+    ("Runs", "Three seeds per method (same questions, different sampling seeds). SpikeAgent seed 0 is from "
+             "2026-10-29; seeds 1 and 2 were run on 2026-11-01 with identical settings."),
+    ("Scores", "Learning-curve figures: accuracy over the last 15 steps (fewer at the start), mean over the 3 seeds; "
+             "the shaded band is ±1 standard error over seeds (not a confidence interval). Transfer figures and "
+             "the tables below: accuracy over all steps of the target channel; whiskers are ±1 standard error "
+             "over seeds. The metric is agreement with Jacob's recorded action, not F1."),
+]
+TIMING_NOTES = [
+    "Hardware and serving: Qwen3.5-27B (BF16) on one NVIDIA H200 for the 2026-10-31 runs and one H100 80GB for "
+    "SpikeAgent seeds 1-2; vLLM 0.32.0, thinking off, at most 4 requests in flight (--max-num-seqs 4, --parallel 4).",
+    "Latency per step: time from sending a step's request(s) to receiving the answer, median over all steps and "
+    "seeds. One step is one model call, except SpikeAgent, whose step is 3 modality reports followed by a head "
+    "decision (4-5 sequential calls).",
+    "Wall-clock per step: run duration divided by the number of steps, with 4 steps in flight; for the learning "
+    "rows it includes the learning calls.",
+    "Learning calls: the rule proposer (one call every 8 steps) and the evaluator re-answers that screen each "
+    "candidate rule set on 24 past steps and re-score the best on up to 60; averaged per step. With the proposer's "
+    "thinking on (experiment C1), a proposer call takes about 115 s instead of 7 s.",
+    "In deployment with learning switched off, the cost is the frozen row: about 3 s per step, dominated by the "
+    "5 images and the transferred expert decisions (about 10k prompt tokens).",
 ]
 METHODS = [
-    ("Base", "zero-shot: task description, images and measurements. Never learns."),
-    ("Simple context", "Base plus Jacob's earlier decisions in this channel (measurements, action and reason; no "
-             "images), the most recent ones that fit in 40,000 characters."),
-    ("Ours", "Simple context plus learned rules. Every 8 questions the model proposes rule edits (add, modify, "
+    ("Base agent", "zero-shot: task description, images and measurements. Never learns."),
+    ("Long-context agent", "Base plus Jacob's earlier decisions in this channel (measurements, action and reason; "
+             "no images), the most recent ones that fit in 40,000 characters."),
+    ("Ours", "Long-context agent plus learned rules. Every 8 questions the model proposes rule edits (add, modify, "
              "delete) from a table of the questions revealed so far. An edit is kept only if re-answering the "
              "revealed questions with it fixes more answers than it breaks (fixed minus broken at least 2, more "
              "when many answers flip). At most 6 rules. This is not ACE: ACE was tried first and did no better "
              "than Base."),
     ("Transferred", "learn on the source channel, freeze the rules and Jacob's decisions from it, and use them on "
              "the target channel with no further learning."),
-    ("Ours from scratch on the target", "Ours learning on the target channel itself. Transfer is only worth it "
-             "if it beats this."),
+    ("Ours, learned on the target", "Ours learning on the target channel itself (the extra bar in the "
+             "'with_scratch' transfer figures). Transfer is only worth it if it beats this."),
     ("SpikeAgent", "the original SpikeAgent curation prompts (upstream 53822ac). Never learns; it has no SPLIT "
              "action."),
-    ("Always DISCARD", "reference: the share of DISCARD questions."),
 ]
 OBSERVATIONS = [
     "Ours is the highest in every setting. Its gain over simple context comes mostly from DISCARD questions.",
@@ -73,11 +89,11 @@ CAVEATS = [
     "SpikeAgent ran under the older protocol (KEEP offered), scored on the questions shared with the other methods.",
 ]
 FIGURES = [
-    "Figures 1-4: learning within one channel, CH30, CH20, CH31 and CH3 (CH31 and CH3 are also the transfer "
-    "sources). Curves: methods that learn; horizontal lines: methods that never learn (overall accuracy); dotted: "
-    "always DISCARD.",
-    "Figures 5-6: transfer CH31 → CH3 and CH3 → CH31. Bars: mean accuracy on the target channel; whiskers: "
-    "s.e.; circles: individual seeds.",
+    "Panels a-d: online learning within one channel, CH30, CH20, CH31 and CH3 (CH31 and CH3 are also the transfer "
+    "sources). All four methods are drawn as curves (accuracy over the last 15 steps, mean of 3 seeds, band = "
+    "±1 s.e.).",
+    "Panels e-f: transfer CH31 → CH3 and CH3 → CH31, four bars (SpikeAgent, Base agent, Long-context "
+    "agent, Ours). The two 'with_scratch' versions add a fifth bar, ours learned on the target channel itself.",
 ]
 
 
@@ -137,7 +153,8 @@ class Writer:
 
     def table(self, header, rows, widths, size=10):
         h = self._line_h(size) * 1.25
-        self._room(h * (len(rows) + 1.5))
+        hl = max(c.count("\n") + 1 for c in header)  # header cells may span several lines
+        self._room(h * (len(rows) + hl + .5))
         xs = [LEFT]
         for w in widths[:-1]:
             xs.append(xs[-1] + w)
@@ -145,8 +162,10 @@ class Writer:
         for r, cells in enumerate([header] + rows):
             for x, cell in zip(xs, cells):  # a leading * marks a bold cell
                 self.fig.text(x / PAGE_W, self.y / PAGE_H, cell.removeprefix("*"), fontsize=size, va="top",
-                              color=F.INK, fontweight="bold" if r == 0 or cell.startswith("*") else "normal")
+                              color=F.INK, fontweight="bold" if r == 0 or cell.startswith("*") else "normal",
+                              linespacing=1.15)
             if r == 0:
+                self.y -= h * (hl - 1) * .9
                 y = (self.y - h * .85) / PAGE_H
                 self.fig.add_artist(self.plt.Line2D([LEFT / PAGE_W, right / PAGE_W], [y, y], color=F.INK2, lw=.8))
             self.y -= h
@@ -155,6 +174,49 @@ class Writer:
     def close(self):
         self.flush()
         self.fig = None
+
+
+def ledger(path):
+    return [json.loads(l) for l in open(path, encoding="utf-8")] if Path(path).exists() else []
+
+
+def timing_rows(sa_seeds):
+    """Per-step cost of each method from the run folders: calls, latency, wall-clock, tokens, learning calls."""
+    V2, HY, CH = F.V2, F.HY, F.CHANNELS
+    tr = (("ch31", "ch3"), ("ch3", "ch31"))
+    sa = [F.SA0] + sorted(p for p in Path(sa_seeds).glob("seed*") if p.is_dir())
+    groups = [
+        ("Ours, frozen (transfer test)", [HY / f"transfer/hybrid_{a}_to_{b}_s{s}" for a, b in tr for s in range(3)]),
+        ("Long-context, frozen (transfer test)", [V2 / f"transfer/context_{a}_to_{b}_s0" for a, b in tr]
+         + [HY / f"transfer/context_{a}_to_{b}_s{s}" for a, b in tr for s in (1, 2)]),
+        ("Base agent", [V2 / f"base/{c}_s{s}" for c in CH for s in range(3)]),
+        ("Long-context, online", [V2 / f"context_online/{c}_s{s}" for c in CH for s in range(3)]),
+        ("Ours, online (learning on)", [HY / f"hybrid/{c}_s{s}" for c in CH for s in range(3)]),
+        ("SpikeAgent", [p / c for p in sa for c in CH]),
+    ]
+    rows = []
+    for name, runs in groups:
+        lat, wall, pt, ct, steps, calls, lcalls = [], [], [], [], 0, 0, 0
+        for r in runs:
+            sims = [F.read(p) for p in (r / "replay").glob("step_*/simulation.json")]
+            sims = [s for s in sims if s.get("provenance") == "expert_recorded" and s.get("timing", {}).get("answer_seconds")]
+            if not sims or not (r / "result.json").exists():
+                continue
+            lat += [s["timing"]["answer_seconds"] for s in sims]
+            steps += len(sims)
+            wall.append(F.read(r / "result.json")["seconds"] / len(sims))
+            main = [x for x in ledger(r / "ledger.jsonl") if x.get("prompt_tokens")]
+            calls += len(main)
+            pt += [x["prompt_tokens"] for x in main]
+            ct += [x["completion_tokens"] for x in main]
+            lcalls += sum(1 for n in ("proposer", "evaluator") for x in ledger(r / f"{n}_ledger.jsonl")
+                          if x.get("prompt_tokens"))
+        if not steps:
+            continue
+        rows.append([name, f"{calls / steps:.1f}", f"{statistics.median(lat):.1f}", f"{statistics.mean(lat):.1f}",
+                     f"{statistics.mean(wall):.1f}", f"{statistics.median(pt):,.0f}", f"{statistics.median(ct):.0f}",
+                     f"{lcalls / steps:.1f}" if lcalls else "0", f"{steps}"])
+    return rows
 
 
 def cell(numbers, key, bold=False):
@@ -193,17 +255,23 @@ def main():
 
         w.heading("Accuracy on all questions of the channel (mean ± s.e. over 3 seeds)")
         rows = []
-        for m, name in (("base", "Base"), ("spikeagent", "SpikeAgent"), ("context", "Simple context"),
+        for m, name in (("spikeagent", "SpikeAgent"), ("base", "Base agent"), ("context", "Long-context agent"),
                         ("ours", "Ours")):
             rows.append([name] + [cell(numbers, f"{c}:{m}", m == "ours") for c in F.CHANNELS])
         n = {c: numbers[f"{c}:base"]["n_questions"] for c in F.CHANNELS}
         w.table(["Within one channel"] + [f"{c.upper()} ({n[c]})" for c in F.CHANNELS], rows, [1.9, 1.3, 1.3, 1.3, 1.3])
         rows = []
-        for m, name in (("base", "Base"), ("spikeagent", "SpikeAgent"), ("context", "Simple context, transferred"),
-                        ("ours", "Ours, transferred"), ("scratch", "Ours from scratch on target")):
+        for m, name in (("spikeagent", "SpikeAgent"), ("base", "Base agent"), ("context", "Long-context agent, transferred"),
+                        ("ours", "Ours, transferred"), ("scratch", "Ours, learned on the target")):
             rows.append([name] + [cell(numbers, f"{s}>{t}:{m}", m == "ours") for s, t in F.TRANSFERS])
         w.table(["Transfer (target accuracy)"] + [f"{s.upper()} → {t.upper()} ({n[t]})"
                                                 for s, t in F.TRANSFERS], rows, [2.9, 1.6, 1.6])
+        w.heading("Running time per step")
+        w.table(["Method", "calls\n/step", "latency\nmedian (s)", "latency\nmean (s)", "wall-clock\n(s/step)",
+                 "prompt\ntokens", "output\ntokens", "learning\ncalls/step", "steps"],
+                timing_rows(args.spikeagent_seeds), [2.25, .46, .66, .6, .7, .6, .56, .66, .4], size=8)
+        for s in TIMING_NOTES:
+            w.bullet(s, size=9.5)
         w.heading("Observations")
         for s in OBSERVATIONS:
             w.bullet(s)
