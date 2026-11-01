@@ -88,6 +88,14 @@ SpikeAgent 这边有两点限制：
 
 ---
 
+### 2.4 C1 的结果（2026-11-01 19:43 UTC）
+
+- 12 个 run 全部完成，没有失败或截断。proposer 每次约 200 秒、输出 7–9k token（A0：7 秒、80 token）。
+- 12 个 run 平均 accuracy A0 82.7% → C1 83.4%，配对差 **+0.7 点，s.e. 2.1**；6 个更好、5 个更差、1 个相同。分通道：CH30 −1.6、CH20 −2.2、CH31 +1.7、CH3 +5.2。
+- 第一条规则被接受的步数基本不变（第 8 题）。
+- 学到的阈值更激进：CH30 三个 seed 为 7、10、5 Hz（A0 为 1.5 Hz）。误删只略增，因为案例压住了规则。这是对最近 ≤60 题过拟合的迹象，不是更接近 Jacob 的 2 Hz。
+- **决定**：只给 proposer 开 thinking 不值得；B1 / C2 暂不跑。阈值问题用数值工具（§6 第 1 项、§12.1 的闸门）解决。明细：`output/shadow/thinking_proposer_20261101/RESULTS.md`。
+
 ## 3. 非 LLM 参照线（建议加进报告；Tianmin 很可能会问）
 
 做法：同样的题、同样的顺序、同样的反馈，只用 14 个测量值做 online 学习，每揭示一题就重新拟合一次。single 题用 logistic regression；pair 题一律答 MERGE，因为这批数据里 Jacob 对 pair 题全选了 MERGE。脚本在 scratchpad，没有调用模型。
