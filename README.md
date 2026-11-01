@@ -10,14 +10,21 @@ one document: [项目总文档.md](项目总文档.md)** (Chinese). Earlier docu
 merged into it on 2026-10-26; the originals are kept unchanged in
 [`docs/archive/superseded_20261026/`](docs/archive/superseded_20261026/).
 
-## At a glance (2026-10-26)
+**New here, or an AI agent?** Start with [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md):
+current state, environment, runbook, rules and pitfalls, in English.
+
+## At a glance (2026-10-29)
 
 - Real data only: four development channels (`cM2-e004_004-006_CH31`, `_CH3`,
   `cM2-e004_011-015_CH20`, `cM2-e008_021-028_CH30`); results are development
   results, not held-out generalization.
-- Two rollout conditions, reported separately: a fixed Python controller where the
-  model answers single decisions, and an **agentic-free** condition where the model
-  chooses every inspection and operation itself (the purest zero-shot setting).
+- Zero-shot baselines are finished. They used two conditions: a fixed Python
+  controller where the model answers single decisions, and an **agentic-free**
+  condition where the model chooses every inspection and operation itself.
+- Current work is **harness v2**: a round-synchronous controller, measured
+  observations, a versioned domain skill and label-checking gates, run on local
+  models with vLLM. Four rounds with Gemma-4-E4B-it reached a four-channel mean
+  F1 of 0.505 (skill_v4). Qwen3.5-27B and Gemma-4-31B-it are next.
 - Primary metric: one-to-one (IoU ≥ 0.5, Hungarian) terminal P/R/F1 over all
   output clusters, alongside expert units recovered, expert spikes deleted and
   reference noise retained.
