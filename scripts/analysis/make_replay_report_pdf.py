@@ -8,9 +8,7 @@ The figures and numbers come from plot_replay_final_figures.build(); the text pa
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
-import statistics
 import sys
 import textwrap
 
@@ -40,18 +38,22 @@ SETUP = [
              "over seeds. The metric is agreement with Jacob's recorded action, not F1."),
 ]
 TIMING_NOTES = [
-    "Hardware and serving: Qwen3.5-27B (BF16) on one NVIDIA H200 for the 2026-10-31 runs and one H100 80GB for "
-    "SpikeAgent seeds 1-2; vLLM 0.32.0, thinking off, at most 4 requests in flight (--max-num-seqs 4, --parallel 4).",
-    "Latency per step: time from sending a step's request(s) to receiving the answer, median over all steps and "
-    "seeds. One step is one model call, except SpikeAgent, whose step is 3 modality reports followed by a head "
-    "decision (4-5 sequential calls).",
-    "Wall-clock per step: run duration divided by the number of steps, with 4 steps in flight; for the learning "
-    "rows it includes the learning calls.",
-    "Learning calls: the rule proposer (one call every 8 steps) and the evaluator re-answers that screen each "
-    "candidate rule set on 24 past steps and re-score the best on up to 60; averaged per step. With the proposer's "
-    "thinking on (experiment C1), a proposer call takes about 115 s instead of 7 s.",
-    "In deployment with learning switched off, the cost is the frozen row: about 3 s per step, dominated by the "
-    "5 images and the transferred expert decisions (about 10k prompt tokens).",
+    "Testing (learning off): every LLM agent answers a step in about 3 s (ours frozen 2.7 s median, base agent 2.7 s, "
+    "long-context 2.3 s; Qwen3.5-27B on one H200, thinking off). With 4 steps in flight, a 70-80 step channel takes "
+    "3-4 minutes. In a human-in-the-loop run the agent is not the bottleneck; the human's feedback is.",
+    "Putting the expert's decisions in the prompt costs almost nothing: ours reads 3x more prompt tokens than the base "
+    "agent (10k vs 3k) at the same latency, because the answer is about 76 tokens and the time goes to the 5 images.",
+    "Learning is what costs, and the cost is verification, not proposing: with learning on, ours takes 12.9 s of "
+    "wall-clock per step, 4.6x the frozen agent. The rule proposer runs once every 8 steps (7 s per call); the "
+    "evaluator re-answers past steps to check every candidate rule set, about 10 extra calls per step. An 81-step "
+    "channel: about 17 minutes with learning vs 4 minutes frozen. A sparser or error-triggered update schedule "
+    "would remove most of this.",
+    "SpikeAgent is about 15x slower per step (42 s) and not more accurate: each step is 4-5 sequential model calls "
+    "that each write a report of about 400 tokens.",
+    "Definitions: latency = request to answer for one step, median and mean over all steps and seeds; wall-clock = run "
+    "time divided by steps, 4 steps in flight, learning calls included; learning calls = proposer + evaluator "
+    "re-answers per step. SpikeAgent seeds 1-2 ran on one H100 80GB. With the proposer's thinking on (experiment C1) "
+    "a proposer call takes about 115 s instead of 7 s.",
 ]
 METHODS = [
     ("Base agent", "zero-shot: task description, images and measurements. Never learns."),
@@ -176,49 +178,6 @@ class Writer:
         self.fig = None
 
 
-def ledger(path):
-    return [json.loads(l) for l in open(path, encoding="utf-8")] if Path(path).exists() else []
-
-
-def timing_rows(sa_seeds):
-    """Per-step cost of each method from the run folders: calls, latency, wall-clock, tokens, learning calls."""
-    V2, HY, CH = F.V2, F.HY, F.CHANNELS
-    tr = (("ch31", "ch3"), ("ch3", "ch31"))
-    sa = [F.SA0] + sorted(p for p in Path(sa_seeds).glob("seed*") if p.is_dir())
-    groups = [
-        ("Ours, frozen (transfer test)", [HY / f"transfer/hybrid_{a}_to_{b}_s{s}" for a, b in tr for s in range(3)]),
-        ("Long-context, frozen (transfer test)", [V2 / f"transfer/context_{a}_to_{b}_s0" for a, b in tr]
-         + [HY / f"transfer/context_{a}_to_{b}_s{s}" for a, b in tr for s in (1, 2)]),
-        ("Base agent", [V2 / f"base/{c}_s{s}" for c in CH for s in range(3)]),
-        ("Long-context, online", [V2 / f"context_online/{c}_s{s}" for c in CH for s in range(3)]),
-        ("Ours, online (learning on)", [HY / f"hybrid/{c}_s{s}" for c in CH for s in range(3)]),
-        ("SpikeAgent", [p / c for p in sa for c in CH]),
-    ]
-    rows = []
-    for name, runs in groups:
-        lat, wall, pt, ct, steps, calls, lcalls = [], [], [], [], 0, 0, 0
-        for r in runs:
-            sims = [F.read(p) for p in (r / "replay").glob("step_*/simulation.json")]
-            sims = [s for s in sims if s.get("provenance") == "expert_recorded" and s.get("timing", {}).get("answer_seconds")]
-            if not sims or not (r / "result.json").exists():
-                continue
-            lat += [s["timing"]["answer_seconds"] for s in sims]
-            steps += len(sims)
-            wall.append(F.read(r / "result.json")["seconds"] / len(sims))
-            main = [x for x in ledger(r / "ledger.jsonl") if x.get("prompt_tokens")]
-            calls += len(main)
-            pt += [x["prompt_tokens"] for x in main]
-            ct += [x["completion_tokens"] for x in main]
-            lcalls += sum(1 for n in ("proposer", "evaluator") for x in ledger(r / f"{n}_ledger.jsonl")
-                          if x.get("prompt_tokens"))
-        if not steps:
-            continue
-        rows.append([name, f"{calls / steps:.1f}", f"{statistics.median(lat):.1f}", f"{statistics.mean(lat):.1f}",
-                     f"{statistics.mean(wall):.1f}", f"{statistics.median(pt):,.0f}", f"{statistics.median(ct):.0f}",
-                     f"{lcalls / steps:.1f}" if lcalls else "0", f"{steps}"])
-    return rows
-
-
 def cell(numbers, key, bold=False):
     r = numbers[key]
     se = f" ± {100 * r['se']:.1f}" if r["se"] is not None else ""
@@ -267,9 +226,8 @@ def main():
         w.table(["Transfer (target accuracy)"] + [f"{s.upper()} → {t.upper()} ({n[t]})"
                                                 for s, t in F.TRANSFERS], rows, [2.9, 1.6, 1.6])
         w.heading("Running time per step")
-        w.table(["Method", "calls\n/step", "latency\nmedian (s)", "latency\nmean (s)", "wall-clock\n(s/step)",
-                 "prompt\ntokens", "output\ntokens", "learning\ncalls/step", "steps"],
-                timing_rows(args.spikeagent_seeds), [2.25, .46, .66, .6, .7, .6, .56, .66, .4], size=8)
+        w.table(F.TIMING_HEADER, F.timing_rows(args.spikeagent_seeds), [2.25, .46, .66, .6, .7, .6, .56, .66, .4],
+                size=8)
         for s in TIMING_NOTES:
             w.bullet(s, size=9.5)
         w.heading("Observations")

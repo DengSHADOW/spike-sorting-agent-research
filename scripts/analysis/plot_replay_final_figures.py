@@ -15,6 +15,7 @@ import argparse
 import json
 import math
 from pathlib import Path
+import statistics
 
 V2 = Path("/workspace/Lv-replay/zs-online-v2/output/overnight_20261031")
 HY = Path("/workspace/Lv-replay/zs-online-hybrid/output/hybrid_20261031")
@@ -85,6 +86,52 @@ def mean_se(xs):
     return m, se
 
 
+def ledger(path):
+    return [json.loads(l) for l in open(path, encoding="utf-8")] if Path(path).exists() else []
+
+
+TIMING_HEADER = ["Method", "calls\n/step", "latency\nmedian (s)", "latency\nmean (s)", "wall-clock\n(s/step)",
+                 "prompt\ntokens", "output\ntokens", "learning\ncalls/step", "steps"]
+
+
+def timing_rows(sa_seeds=SA_SEEDS):
+    """Per-step cost of each method from the run folders: calls, latency, wall-clock, tokens, learning calls."""
+    tr = TRANSFERS
+    sa = [SA0] + sorted(p for p in Path(sa_seeds).glob("seed*") if p.is_dir())
+    groups = [
+        ("Ours, frozen (transfer test)", [HY / f"transfer/hybrid_{a}_to_{b}_s{s}" for a, b in tr for s in range(3)]),
+        ("Long-context, frozen (transfer test)", [V2 / f"transfer/context_{a}_to_{b}_s0" for a, b in tr]
+         + [HY / f"transfer/context_{a}_to_{b}_s{s}" for a, b in tr for s in (1, 2)]),
+        ("Base agent", [V2 / f"base/{c}_s{s}" for c in CHANNELS for s in range(3)]),
+        ("Long-context, online", [V2 / f"context_online/{c}_s{s}" for c in CHANNELS for s in range(3)]),
+        ("Ours, online (learning on)", [HY / f"hybrid/{c}_s{s}" for c in CHANNELS for s in range(3)]),
+        ("SpikeAgent", [p / c for p in sa for c in CHANNELS]),
+    ]
+    rows = []
+    for name, runs in groups:
+        lat, wall, pt, ct, steps, calls, lcalls = [], [], [], [], 0, 0, 0
+        for r in runs:
+            sims = [read(p) for p in (r / "replay").glob("step_*/simulation.json")]
+            sims = [s for s in sims if s.get("provenance") == "expert_recorded" and s.get("timing", {}).get("answer_seconds")]
+            if not sims or not (r / "result.json").exists():
+                continue
+            lat += [s["timing"]["answer_seconds"] for s in sims]
+            steps += len(sims)
+            wall.append(read(r / "result.json")["seconds"] / len(sims))
+            main = [x for x in ledger(r / "ledger.jsonl") if x.get("prompt_tokens")]
+            calls += len(main)
+            pt += [x["prompt_tokens"] for x in main]
+            ct += [x["completion_tokens"] for x in main]
+            lcalls += sum(1 for n in ("proposer", "evaluator") for x in ledger(r / f"{n}_ledger.jsonl")
+                          if x.get("prompt_tokens"))
+        if not steps:
+            continue
+        rows.append([name, f"{calls / steps:.1f}", f"{statistics.median(lat):.1f}", f"{statistics.mean(lat):.1f}",
+                     f"{statistics.mean(wall):.1f}", f"{statistics.median(pt):,.0f}", f"{statistics.median(ct):.0f}",
+                     f"{lcalls / steps:.1f}" if lcalls else "0", f"{steps}"])
+    return rows
+
+
 def build(sa_seeds=SA_SEEDS):
     """([(name, matplotlib figure)], numbers) of the six figures; make_replay_report_pdf.py uses it too."""
     table = runs_table(Path(sa_seeds))
@@ -122,7 +169,8 @@ def build(sa_seeds=SA_SEEDS):
 
     def panel_title(ax, letter, text):
         ax.set_title(text, loc="left", x=.045, fontsize=10)
-        ax.text(-.04, 1.0, letter, transform=ax.transAxes, fontsize=11, fontweight="bold", va="bottom", ha="left")
+        ax.text(-.04 if ax.axison else 0, 1.0, letter, transform=ax.transAxes, fontsize=11, fontweight="bold",
+                va="bottom", ha="left")
 
     def legend_top(fig, methods):
         fig.legend([Line2D([], [], color=COLOR[m], lw=2) for m in methods], [NAME[m] for m in methods],
@@ -174,6 +222,36 @@ def build(sa_seeds=SA_SEEDS):
                      "±1 standard error over 3 seeds.", fontsize=6.5, color=INK2, va="bottom")
             fig.subplots_adjust(left=.17, right=.97, top=.86, bottom=.26)
             figures.append((f"transfer_{src}_to_{tgt}{suffix}", fig))
+    # running time per step, as a table figure in the same style (panel g); drawn by hand for exact alignment
+    rows = timing_rows(sa_seeds)
+    fig, ax = plt.subplots(figsize=(7.2, 1.2 + .27 * len(rows) + 1.0))
+    ax.axis("off")
+    widths = [.3, .07, .1, .09, .1, .09, .08, .1, .07]
+    xs = [sum(widths[:i]) for i in range(len(widths))]
+    y, rh = .97, .27 / (fig.get_figheight()) * 1.0
+    rh = 1.0 / (len(rows) + 2.6)  # row height in axes units
+    ax.add_patch(plt.Rectangle((0, y - 1.9 * rh), 1, 1.9 * rh, color="#efefef", lw=0))
+    for x, wdt, h in zip(xs, widths, TIMING_HEADER):
+        ax.text(x + (.01 if wdt == .3 else wdt / 2), y - .06 * rh, h, ha="left" if wdt == .3 else "center", va="top",
+                fontsize=8, fontweight="bold", linespacing=1.15)
+    y -= 1.9 * rh
+    for row in rows:
+        for x, wdt, v in zip(xs, widths, row):
+            ax.text(x + (.01 if wdt == .3 else wdt / 2), y - rh / 2, v, ha="left" if wdt == .3 else "center",
+                    va="center", fontsize=8)
+        y -= rh
+    ax.set(xlim=(0, 1), ylim=(0, 1))
+    panel_title(ax, "g", "Running time per step (Qwen3.5-27B, thinking off, 4 requests in flight, one H200/H100)")
+    import textwrap as _tw
+    foot = ("Testing (learning off): about 3 s per step for every LLM agent, 3-4 min per channel with 4 steps in flight; "
+            "the expert's decisions in the prompt add no time (answers are ~76 tokens, the 5 images dominate). "
+            "Learning on: 12.9 s per step, 4.6x frozen; the cost is the evaluator re-answering past steps to verify "
+            "candidate rules (~10 calls/step), not the proposer (1 call per 8 steps). SpikeAgent: ~15x slower (4-5 "
+            "sequential calls per step, ~400-token reports) and not more accurate. Latency = request to answer per "
+            "step (median / mean over steps and seeds); wall-clock = run time / steps.")
+    fig.text(.01, .01, "\n".join(_tw.wrap(foot, 150)), fontsize=6.5, color=INK2, va="bottom", linespacing=1.3)
+    fig.subplots_adjust(left=.02, right=.98, top=.9, bottom=.3)
+    figures.append(("running_time", fig))
     return figures, numbers
 
 
