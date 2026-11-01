@@ -1,6 +1,6 @@
-"""One PDF for the lab: setup, method definitions, accuracy tables and notes, then the six final figures (read-only).
+"""One PDF for the lab: setup, method definitions, accuracy and time tables and notes, then the figures (read-only).
 
-The figures and numbers come from plot_replay_final_figures.build(); the text pages are drawn with matplotlib
+The panels and numbers come from plot_replay_final_figures (prepare + draw_*); the text pages are drawn with matplotlib
 (the project environment has no other PDF library).
 
     .venv/bin/python scripts/analysis/make_replay_report_pdf.py --out output/shadow/final_figures_20261101/replay_final_report.pdf
@@ -53,7 +53,7 @@ TIMING_NOTES = [
     "Definitions: latency = request to answer for one step, median and mean over all steps and seeds; wall-clock = run "
     "time divided by steps, 4 steps in flight, learning calls included; learning calls = proposer + evaluator "
     "re-answers per step. SpikeAgent seeds 1-2 ran on one H100 80GB. With the proposer's thinking on (experiment C1) "
-    "a proposer call takes about 115 s instead of 7 s.",
+    "a proposer call takes about 200 s instead of 7 s, for no measurable gain in accuracy.",
 ]
 METHODS = [
     ("Base agent", "zero-shot: task description, images and measurements. Never learns."),
@@ -92,9 +92,10 @@ CAVEATS = [
 ]
 FIGURES = [
     "The figures follow on the next pages, each with its caption: a-d online learning on CH30, CH20, CH31 and CH3 "
-    "(all four methods as curves, mean of 3 seeds, band = \u00b11 s.e.); e-f transfer CH31 \u2192 CH3 and CH3 \u2192 CH31 "
-    "with four bars; e\u2032-f\u2032 the same with a fifth bar, ours learned on the target channel itself; g the "
-    "running-time table.",
+    "(all four methods as curves, mean of 3 seeds, band = \u00b11 s.e.); a\u2032-d\u2032 the same channels with ours "
+    "alone (each seed, their mean, and the steps where the rule proposer runs); e-f transfer CH31 \u2192 CH3 and "
+    "CH3 \u2192 CH31 with four bars; e\u2032-f\u2032 the same with a fifth bar, ours learned on the target channel "
+    "itself; g the running-time-per-step table; h the training and testing time of the transfer experiments.",
 ]
 
 
@@ -177,7 +178,7 @@ class Writer:
         self.fig = None
 
 
-def figure_pages(pdf, plt, ctx):
+def figure_pages(pdf, plt, ctx, preview=None):
     """Letter pages with two panels each, every panel drawn in place with its caption."""
     numbers, common = ctx["numbers"], ctx["common"]
     pct = lambda key: f"{100 * numbers[key]['accuracy']:.1f}%"
@@ -209,33 +210,61 @@ def figure_pages(pdf, plt, ctx):
                       "request to answer for one step, median and mean over steps and seeds; wall-clock: run time "
                       "divided by steps.")
 
+    def ours_caption(letter, c):
+        r = numbers[f"{c}:ours"]
+        return (f"Figure {letter}. Online learning on {c.upper()}, ours only: the runs of figure {letter[0]} without the "
+                f"baselines. Thin lines: the 3 seeds; thick line: their mean; band: \u00b11 standard error; dotted "
+                f"lines: the rule proposer runs after every {F.RULE_EVERY} steps (an accepted edit applies from the next "
+                f"step). Overall accuracy {pct(f'{c}:ours')}; correct per seed {' / '.join(map(str, r['per_seed_correct']))} "
+                f"of {len(common[c])}.")
+
+    transfer_time_caption = ("Figure h. Training and testing time per channel in the transfer experiments: wall-clock "
+                             "of each run (min:s) per seed and mean. Training = ours learning online on the source "
+                             "channel; testing = the frozen agent on the target channel. The transferred long-context "
+                             "agent has no training run (its pool is Jacob's recorded source decisions, no model call); "
+                             "ours learned on the target learns while it answers (one run). SpikeAgent asks 57 / 99 "
+                             "questions under the older protocol. The breakdown is in the section 'Training and "
+                             "testing time in the transfer experiments'.")
+
     pages = [[("online", "ch30", "a"), ("online", "ch20", "b")],
              [("online", "ch31", "c"), ("online", "ch3", "d")],
+             [("online_ours", "ch30", "a\u2032"), ("online_ours", "ch20", "b\u2032")],
+             [("online_ours", "ch31", "c\u2032"), ("online_ours", "ch3", "d\u2032")],
              [("transfer", ("ch31", "ch3"), "e"), ("transfer", ("ch3", "ch31"), "f")],
              [("transfer_scratch", ("ch31", "ch3"), "e\u2032"), ("transfer_scratch", ("ch3", "ch31"), "f\u2032")],
-             [("timing", None, "g")]]
+             [("timing", None, "g"), ("transfer_time", None, "h")]]
     block, ax_h, ax_w, head = 4.75, 2.7, 5.0, .65
-    for page in pages:
+    for n, page in enumerate(pages, 1):
         fig = plt.figure(figsize=(PAGE_W, PAGE_H))
         for i, (kind, arg, letter) in enumerate(page):
             top = PAGE_H - TOP - i * block
             if kind == "timing":
                 w_, h_ = 6.9, 2.6
+            elif kind == "transfer_time":
+                w_, h_ = 6.9, 3.3
             else:
                 w_, h_ = ax_w, ax_h
             ax = fig.add_axes([(PAGE_W - w_) / 2 / PAGE_W, (top - head - h_) / PAGE_H, w_ / PAGE_W, h_ / PAGE_H])
             if kind == "online":
                 F.draw_online(ax, ctx, arg, letter)
                 cap, below = online_caption(letter, arg), .55
+            elif kind == "online_ours":
+                F.draw_online_ours(ax, ctx, arg, letter)
+                cap, below = ours_caption(letter, arg), .55
             elif kind == "timing":
                 F.draw_timing(ax, ctx, letter)
                 cap, below = timing_caption, .15
+            elif kind == "transfer_time":
+                F.draw_transfer_time(ax, ctx, letter)
+                cap, below = transfer_time_caption, .15
             else:
                 F.draw_transfer(ax, ctx, *arg, letter, with_scratch=(kind == "transfer_scratch"))
                 cap, below = transfer_caption(letter, *arg, kind == "transfer_scratch"), .7
             fig.text(LEFT / PAGE_W, (top - head - h_ - below) / PAGE_H, "\n".join(textwrap.wrap(cap, 118)),
                      fontsize=9, color=F.INK, va="top", linespacing=1.35)
         pdf.savefig(fig)
+        if preview:
+            fig.savefig(Path(preview) / f"figure_page_{n}.png", dpi=90)
         plt.close(fig)
 
 
@@ -258,6 +287,8 @@ def main():
     from matplotlib.backends.backend_pdf import PdfPages
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
+    if args.preview_dir:
+        Path(args.preview_dir).mkdir(parents=True, exist_ok=True)
     with PdfPages(out) as pdf:
         w = Writer(plt, pdf, args.preview_dir)
         w.text("Learning from Jacob's curation decisions", size=20, weight="bold", after=.2)
@@ -292,6 +323,11 @@ def main():
                 size=8)
         for s in TIMING_NOTES:
             w.bullet(s, size=9.5)
+        w.heading("Training and testing time in the transfer experiments (wall-clock per channel, min:s)")
+        w.table(F.TRANSFER_TIME_HEADER, F.transfer_time_rows(args.spikeagent_seeds),
+                [1.8, .95, 1.22, .42, .78, 1.22, .42], size=7.5)
+        for s in F.transfer_time_notes(args.spikeagent_seeds):
+            w.bullet(s, size=9.5)
         w.heading("Observations")
         for s in OBSERVATIONS:
             w.bullet(s)
@@ -305,7 +341,7 @@ def main():
                "seeds 1-2). Figures: scripts/analysis/plot_replay_final_figures.py; this PDF: "
                "scripts/analysis/make_replay_report_pdf.py.", size=9, color=F.INK2, after=0)
         w.close()
-        figure_pages(pdf, plt, ctx)
+        figure_pages(pdf, plt, ctx, args.preview_dir)
     print(out)
 
 
