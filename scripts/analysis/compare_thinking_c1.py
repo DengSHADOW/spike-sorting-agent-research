@@ -98,7 +98,23 @@ def main():
         lines.append(f"| {c.upper()} | {s} | {c1['proposer_calls']} | {c1['proposer_truncated']} | {c1['proposer_s']:.0f} | "
                      f"{c1['proposer_out']:.0f} | {c1['failed_calls']} | {c1['seconds'] / 60:.0f} |")
     lines += ["", "A0 proposer calls take about 7 s and 80 output tokens; the C1 runs shared one server four at a time, so their "
-              "run minutes are not comparable to A0's single-channel runs.", "", "## Final rules", ""]
+              "run minutes are not comparable to A0's single-channel runs.", ""]
+    tr = c1root / "transfer"
+    if all((tr / f"c1_{a}_to_{b}_s{s}/result.json").exists() for a, b in F.TRANSFERS for s in range(3)):
+        lines += ["## Transfer (frozen agents, answers with thinking off)", "",
+                  "C1 agent learned on the source, frozen, tested on the target (`transfer/c1_*`, one run at a time on "
+                  "the H100), against A0's (`hybrid_20261031/transfer/hybrid_*`, H200).", "",
+                  "| transfer | seed | A0 correct | C1 correct | Δ | A0 test time | C1 test time |", "|---|---|---|---|---|---|---|"]
+        for a, b in F.TRANSFERS:
+            for s in range(3):
+                ra, rc = F.HY / f"transfer/hybrid_{a}_to_{b}_s{s}", tr / f"c1_{a}_to_{b}_s{s}"
+                sa, sc = run_summary(ra), run_summary(rc)
+                lines.append(f"| {a.upper()} → {b.upper()} | {s} | {sa['correct']}/{sa['n']} | {sc['correct']}/{sc['n']} | "
+                             f"{sc['correct'] - sa['correct']:+d} | {F.mmss(sa['seconds'])} | {F.mmss(sc['seconds'])} |")
+        lines += ["", "A frozen test never calls the proposer, so thinking adds no test time; the C1 tests are faster because "
+                  "the GPU Pod renders the images faster (CH3: 80 s against 139 s), while answering takes the same "
+                  "(about 3 s per question).", ""]
+    lines += ["## Final rules", ""]
     for c, s, a0, c1 in detail:
         lines += [f"- **{c.upper()} seed {s}**", f"  - A0: " + (" | ".join(a0["rules"]) or "(none)"),
                   f"  - C1: " + (" | ".join(c1["rules"]) or "(none)")]

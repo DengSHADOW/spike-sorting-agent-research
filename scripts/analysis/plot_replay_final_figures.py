@@ -76,6 +76,9 @@ def runs_table(sa_seeds):
             HY / f"transfer/context_{src}_to_{tgt}_s{s}" for s in (1, 2)]
         t[(f, "ours")] = [HY / f"transfer/hybrid_{src}_to_{tgt}_s{s}" for s in range(3)]
         t[(f, "scratch")] = t[(tgt, "ours")]
+        c1 = [C1 / f"transfer/c1_{src}_to_{tgt}_s{s}" for s in range(3)]
+        if all((r / "result.json").exists() for r in c1):  # frozen C1 agents (rules learned with thinking)
+            t[(f, "thinking")] = c1
     return t
 
 
@@ -208,19 +211,24 @@ def curve_stats(ctx, c, m):
 ONLINE_METHODS = ("spikeagent", "base", "context", "ours")
 
 
-def draw_online(ax, ctx, c, letter, methods=ONLINE_METHODS, title=True, ylabel=YLABEL, legend_ncol=None):
-    """Panel: within-channel learning curves of the given methods on channel c."""
+def draw_online(ax, ctx, c, letter, methods=ONLINE_METHODS, title=True, ylabel=YLABEL, legend_ncol=None, shown=None,
+                legend=True):
+    """Panel: within-channel learning curves of the given methods on channel c.
+    shown: method whose colour and name each curve takes (e.g. {"thinking": "ours"}); default its own."""
+    shown = shown or {}
     n = len(ctx["common"][c])
     x = range(1, n + 1)
     for m in methods:
         _, mean, se = curve_stats(ctx, c, m)
+        s = shown.get(m, m)
         ax.fill_between(x, [a - b for a, b in zip(mean, se)], [a + b for a, b in zip(mean, se)],
-                        color=COLOR[m], alpha=.18, lw=0)
-        ax.plot(x, mean, color=COLOR[m], lw=1.8, ls=DASH.get(m, "-"))
+                        color=COLOR[s], alpha=.18, lw=0)
+        ax.plot(x, mean, color=COLOR[s], lw=1.8, ls=DASH.get(s, "-"))
     online_axes(ax, n, ylabel)
     if title:
         panel_title(ax, letter, f"Online learning ({c.upper()}, {n} steps)")
-    legend_above(ax, methods, y=1.12 if title else 1.02, ncol=legend_ncol)
+    if legend:
+        legend_above(ax, [shown.get(m, m) for m in methods], y=1.12 if title else 1.02, ncol=legend_ncol)
 
 
 def ours_legend():
@@ -249,13 +257,14 @@ def draw_online_ours(ax, ctx, c, letter, legend=True):
                   handlelength=1.6, columnspacing=1.3)
 
 
-def draw_transfer(ax, ctx, src, tgt, letter, with_scratch=False, title=True, ylabel=YLABEL):
-    """Panel: accuracy on the target channel after learning on the source (bars, mean ± s.e.)."""
+def draw_transfer(ax, ctx, src, tgt, letter, with_scratch=False, title=True, ylabel=YLABEL, ours="ours"):
+    """Panel: accuracy on the target channel after learning on the source (bars, mean ± s.e.).
+    ours: which runs fill the Ours bar ("thinking" = the frozen C1 agents), drawn and named as Ours either way."""
     import matplotlib
     numbers, f = ctx["numbers"], f"{src}>{tgt}"
     order = ["spikeagent", "base", "context", "ours"] + (["scratch"] if with_scratch else [])
-    vals = [numbers[f"{f}:{m}"]["accuracy"] for m in order]
-    errs = [numbers[f"{f}:{m}"]["se"] or 0 for m in order]
+    vals = [numbers[f"{f}:{ours if m == 'ours' else m}"]["accuracy"] for m in order]
+    errs = [numbers[f"{f}:{ours if m == 'ours' else m}"]["se"] or 0 for m in order]
     ax.bar(range(len(order)), vals, width=.62, color=[COLOR[m] for m in order], yerr=errs,
            error_kw=dict(ecolor=INK, lw=1, capsize=3), zorder=2)
     for i, (v, e) in enumerate(zip(vals, errs)):
