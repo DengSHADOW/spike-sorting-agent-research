@@ -23,6 +23,7 @@ V2 = Path("/workspace/Lv-replay/zs-online-v2/output/overnight_20261031")
 HY = Path("/workspace/Lv-replay/zs-online-hybrid/output/hybrid_20261031")
 SA0 = Path("/workspace/replay-zeroshot-exp34/output/exp4_spikeagent_qwen27b_nothink_20261029")
 SA_SEEDS = Path("output/shadow/spikeagent_seeds_20261101/code/output")
+C1 = Path("output/shadow/thinking_proposer_20261101/code/output")  # ours with the rule proposer's thinking on
 CHANNELS = ("ch30", "ch20", "ch31", "ch3")
 TRANSFERS = (("ch31", "ch3"), ("ch3", "ch31"))
 WINDOW = 15
@@ -30,9 +31,11 @@ RULE_EVERY = 8  # ours proposes rule edits after every 8 revealed questions (rul
 
 # Colours and names follow the advisor's example figure (Slack, 2026-11-01).
 INK, INK2 = "#0b0b0b", "#52514e"
-COLOR = dict(spikeagent="#D4A62A", base="#8E8E8E", context="#D9703A", ours="#2F6EB8", scratch="#3BA27A")
+COLOR = dict(spikeagent="#D4A62A", base="#8E8E8E", context="#D9703A", ours="#2F6EB8", scratch="#3BA27A",
+             thinking="#7B4FA6")
 NAME = dict(spikeagent="SpikeAgent", base="Base agent", context="Long-context agent", ours="Ours",
-            scratch="Ours, learned on the target")
+            scratch="Ours, learned on the target", thinking="Ours + thinking")
+DASH = dict(thinking=(0, (4, 1.6)))  # line style next to the colour, so the two ours lines differ without colour
 XLABEL = dict(spikeagent="SpikeAgent", base="Base\nagent", context="Long-\ncontext\nagent", ours="Ours",
               scratch="Ours,\nlearned on\nthe target")
 
@@ -63,6 +66,8 @@ def runs_table(sa_seeds):
         t[(c, "context")] = [V2 / f"context_online/{c}_s{s}" for s in range(3)]
         t[(c, "ours")] = [HY / f"hybrid/{c}_s{s}" for s in range(3)]
         t[(c, "spikeagent")] = sa[c]
+        if all((C1 / f"seed{s}/{c}/result.json").exists() for s in range(3)):
+            t[(c, "thinking")] = [C1 / f"seed{s}/{c}" for s in range(3)]
     for src, tgt in TRANSFERS:
         f = f"{src}>{tgt}"
         t[(f, "base")] = t[(tgt, "base")]
@@ -172,16 +177,19 @@ def panel_title(ax, letter, text):
     ax.text(0, 1.03, text, transform=ax.transAxes, fontsize=10, va="bottom", ha="left")
 
 
-def legend_above(ax, methods, y=1.12):
+def legend_above(ax, methods, y=1.12, ncol=None):
     from matplotlib.lines import Line2D
-    ax.legend([Line2D([], [], color=COLOR[m], lw=2) for m in methods], [NAME[m] for m in methods],
-              loc="lower center", bbox_to_anchor=(.5, y), ncol=len(methods), frameon=False, handlelength=1.6,
-              columnspacing=1.3)
+    ax.legend([Line2D([], [], color=COLOR[m], lw=2, ls=DASH.get(m, "-")) for m in methods], [NAME[m] for m in methods],
+              loc="lower center", bbox_to_anchor=(.5, y), ncol=ncol or len(methods), frameon=False,
+              handlelength=2.2 if any(m in DASH for m in methods) else 1.6, columnspacing=1.3)
 
 
-def online_axes(ax, n):
+YLABEL = "Accuracy (agreement with the expert)"
+
+
+def online_axes(ax, n, ylabel=YLABEL):
     import matplotlib
-    ax.set(xlim=(1, n), ylim=(0, 1.0), xlabel="Steps", ylabel="Accuracy (agreement with the expert)")
+    ax.set(xlim=(1, n), ylim=(0, 1.0), xlabel="Steps", ylabel=ylabel)
     ax.set_xticks([1] + list(range(10, n + 1, 10)))
     ax.set_yticks([0, .25, .5, .75, 1.0])
     ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1, decimals=0))
@@ -197,18 +205,22 @@ def curve_stats(ctx, c, m):
     return curves, mean, se
 
 
-def draw_online(ax, ctx, c, letter):
-    """Panel: within-channel learning curves of the four methods on channel c."""
+ONLINE_METHODS = ("spikeagent", "base", "context", "ours")
+
+
+def draw_online(ax, ctx, c, letter, methods=ONLINE_METHODS, title=True, ylabel=YLABEL, legend_ncol=None):
+    """Panel: within-channel learning curves of the given methods on channel c."""
     n = len(ctx["common"][c])
     x = range(1, n + 1)
-    for m in ("spikeagent", "base", "context", "ours"):
+    for m in methods:
         _, mean, se = curve_stats(ctx, c, m)
         ax.fill_between(x, [a - b for a, b in zip(mean, se)], [a + b for a, b in zip(mean, se)],
                         color=COLOR[m], alpha=.18, lw=0)
-        ax.plot(x, mean, color=COLOR[m], lw=1.8)
-    online_axes(ax, n)
-    panel_title(ax, letter, f"Online learning ({c.upper()}, {n} steps)")
-    legend_above(ax, ("spikeagent", "base", "context", "ours"))
+        ax.plot(x, mean, color=COLOR[m], lw=1.8, ls=DASH.get(m, "-"))
+    online_axes(ax, n, ylabel)
+    if title:
+        panel_title(ax, letter, f"Online learning ({c.upper()}, {n} steps)")
+    legend_above(ax, methods, y=1.12 if title else 1.02, ncol=legend_ncol)
 
 
 def ours_legend():
@@ -237,7 +249,7 @@ def draw_online_ours(ax, ctx, c, letter, legend=True):
                   handlelength=1.6, columnspacing=1.3)
 
 
-def draw_transfer(ax, ctx, src, tgt, letter, with_scratch=False):
+def draw_transfer(ax, ctx, src, tgt, letter, with_scratch=False, title=True, ylabel=YLABEL):
     """Panel: accuracy on the target channel after learning on the source (bars, mean ± s.e.)."""
     import matplotlib
     numbers, f = ctx["numbers"], f"{src}>{tgt}"
@@ -249,12 +261,13 @@ def draw_transfer(ax, ctx, src, tgt, letter, with_scratch=False):
     for i, (v, e) in enumerate(zip(vals, errs)):
         ax.text(i, v + e + .02, f"{100 * v:.1f}", ha="center", va="bottom", fontsize=9, fontweight="bold")
     top = min(1.0, (max(v + e for v, e in zip(vals, errs)) + .12) // .25 * .25 + .25)
-    ax.set(xlim=(-.6, len(order) - .4), ylim=(0, top), ylabel="Accuracy (agreement with the expert)")
+    ax.set(xlim=(-.6, len(order) - .4), ylim=(0, top), ylabel=ylabel)
     ax.set_yticks([t / 4 for t in range(int(top * 4) + 1)])
     ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1, decimals=0))
     ax.set_xticks(range(len(order)), [XLABEL[m] for m in order])
     ax.spines[["top", "right"]].set_visible(False)
-    panel_title(ax, letter, f"Transfer to another dataset ({src.upper()} → {tgt.upper()})")
+    if title:
+        panel_title(ax, letter, f"Transfer to another dataset ({src.upper()} → {tgt.upper()})")
 
 
 def draw_timing(ax, ctx, letter):
