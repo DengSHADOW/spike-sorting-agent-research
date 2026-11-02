@@ -7,7 +7,8 @@ figures for ours with each back end, no panel titles, no footnotes, y axis "Accu
 
 Each folder: online_ch31 and online_ch3 (ours alone, mean of 3 seeds with ±1 s.e. band, no legend) and transfer_ch31_to_ch3 and
 transfer_ch3_to_ch31 (SpikeAgent, Base agent, Long-context agent, Ours). times.md gives the eight running times:
-training time behind each online figure, testing time behind each transfer figure.
+training time behind each online figure, testing time behind each transfer figure. all_8_figures.pdf has the
+eight figures, one per page.
 
     .venv/bin/python scripts/analysis/plot_replay_clean_figures.py --out output/shadow/final_figures_20261101_by_backend
 """
@@ -62,6 +63,8 @@ def main():
     args = p.parse_args()
     ctx = F.prepare()
     import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+    every = PdfPages(Path(args.out) / "all_8_figures.pdf")  # one page per figure: no thinking first, then thinking
     for name, m, _ in BACKENDS:
         out = Path(args.out) / name
         out.mkdir(parents=True, exist_ok=True)
@@ -83,7 +86,9 @@ def main():
         for fname, fig in figures:
             fig.savefig(out / f"{fname}.pdf")
             fig.savefig(out / f"{fname}.png", dpi=150)
+            every.savefig(fig)
             plt.close(fig)
+    every.close()
     md = times_md(ctx)
     (Path(args.out) / "times.md").write_text(md + "\n", encoding="utf-8")
     print(md)

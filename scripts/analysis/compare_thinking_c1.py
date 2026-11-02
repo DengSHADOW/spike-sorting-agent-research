@@ -114,6 +114,40 @@ def main():
         lines += ["", "A frozen test never calls the proposer, so thinking adds no test time; the C1 tests are faster because "
                   "the GPU Pod renders the images faster (CH3: 80 s against 139 s), while answering takes the same "
                   "(about 3 s per question).", ""]
+    at = c1root / "transfer_answer_thinking"
+    if all((at / f"c1_{a}_to_{b}_s{s}/result.json").exists() for a, b in F.TRANSFERS for s in range(3)):
+        lines += ["## Transfer with answers thinking (same frozen C1 agents)", "",
+                  "Same rules, cases, questions and seeds as the table above; only the answers are given with thinking on "
+                  "(output cap 8000 tokens; a truncated answer is retried once, a second truncation stops the run). A "
+                  "question left unanswered counts as wrong.", "",
+                  "| transfer | seed | answers no thinking | answers thinking | Δ | fixed / broken | DISCARD no → yes | "
+                  "SPLIT no → yes | median latency | median output tokens | truncated | run time | status |",
+                  "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+        diffs = []
+        for a, b in F.TRANSFERS:
+            for s in range(3):
+                sn = F.load_steps(tr / f"c1_{a}_to_{b}_s{s}")
+                rt = at / f"c1_{a}_to_{b}_s{s}"
+                st_ = F.load_steps(rt)
+                keys = sorted(sn)
+                ok = {k: st_.get(k, (False,))[0] for k in keys}
+                cn, ct = sum(sn[k][0] for k in keys), sum(ok.values())
+                diffs.append((ct - cn) / len(keys))
+                act = {x: (sum(sn[k][0] for k in keys if sn[k][1] == x), sum(ok[k] for k in keys if sn[k][1] == x),
+                           sum(sn[k][1] == x for k in keys)) for x in ("DISCARD", "SPLIT")}
+                calls = [x for x in ledger(rt / "ledger.jsonl") if x.get("completion_tokens")]
+                res = read(rt / "result.json")
+                lines.append(
+                    f"| {a.upper()} → {b.upper()} | {s} | {cn}/{len(keys)} | {ct}/{len(keys)}"
+                    f"{f' ({len(st_)} answered)' if len(st_) < len(keys) else ''} | {ct - cn:+d} | "
+                    f"{sum(ok[k] and not sn[k][0] for k in keys)} / {sum(sn[k][0] and not ok[k] for k in keys)} | "
+                    f"{act['DISCARD'][0]} → {act['DISCARD'][1]} of {act['DISCARD'][2]} | {act['SPLIT'][0]} → {act['SPLIT'][1]} of "
+                    f"{act['SPLIT'][2]} | {statistics.median(x['seconds'] for x in calls):.0f} s | "
+                    f"{statistics.median(x['completion_tokens'] for x in calls):.0f} | "
+                    f"{sum(x['finish_reason'] == 'length' for x in calls)} | {F.mmss(res['seconds'])} | {res.get('status')} |")
+        lines += ["", f"**Paired over the 6 runs: {100 * statistics.mean(diffs):+.1f} points with answers thinking "
+                      f"(s.e. {100 * statistics.stdev(diffs) / len(diffs) ** .5:.1f}); better in {sum(d > 0 for d in diffs)}, "
+                      f"worse in {sum(d < 0 for d in diffs)}, equal in {sum(d == 0 for d in diffs)}.**", ""]
     lines += ["## Final rules", ""]
     for c, s, a0, c1 in detail:
         lines += [f"- **{c.upper()} seed {s}**", f"  - A0: " + (" | ".join(a0["rules"]) or "(none)"),
