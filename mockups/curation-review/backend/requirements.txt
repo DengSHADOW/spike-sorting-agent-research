@@ -1,4 +1,5 @@
-# Offline MAT imports and read-only reviewer analysis; HTTP/SQLite uses stdlib.
+# Offline MAT imports, reviewer previews and Agent observation rendering; HTTP/SQLite uses stdlib.
 numpy==2.2.6
 scipy==1.15.3
 h5py==3.14.0
+matplotlib==3.10.7
