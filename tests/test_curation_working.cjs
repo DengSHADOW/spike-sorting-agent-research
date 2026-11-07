@@ -5,7 +5,34 @@ function fixture(){const waves=[[0,2,0],[0,4,0],[0,1,0],[0,1.5,0],[0,-2,0],[0,-3
 const task=(source,phase='phase1',target=null)=>({key:target?`pair:${source}:${target}`:`cluster:${source}`,source,target,phase});
 const apply=(input,state,t,action)=>C.apply(input,state,t,{action,reason:'Verified fixture judgment'},state.version);
 test('split updates actual spike memberships and both children stay pending',async()=>{const {input,state}=fixture(),next=await apply(input,state,task(1),'SPLIT');assert.deepEqual(Array.from(C.assignments(input,next)),[1,1,3,3,2,2]);assert.deepEqual(Array.from(C.assignments(input,state)),[1,1,1,1,2,2]);assert.deepEqual(C.units(input,next).map(u=>[u.id,u.n]),[[1,2],[2,2],[3,2]]);assert.deepEqual(C.clusterTasks(input,next).map(t=>t.source),[1,2,3]);assert.equal(next.events[0].execution_status,'applied');});
-test('Phase 1 completion opens pair tasks; merge returns changed membership for reinspection',async()=>{let {input,state}=fixture();state=await apply(input,state,task(1),'SPLIT');for(const cid of [1,2,3])state=await apply(input,state,task(cid),'KEEP');assert.equal(state.phase,'phase2');assert.ok(C.tasks(input,state).every(t=>t.target&&t.phase==='phase2'));state=await apply(input,state,task(1,'phase2',3),'MERGE');assert.equal(state.phase,'phase1');assert.deepEqual(C.clusterTasks(input,state).map(t=>t.source),[3]);assert.deepEqual(Array.from(C.assignments(input,state)),[3,3,3,3,2,2]);state=await apply(input,state,task(3),'KEEP');assert.equal(state.phase,'phase2');state=await apply(input,state,task(2,'phase2',3),'DISCARD');assert.deepEqual(Array.from(C.assignments(input,state)),[3,3,3,3,0,0]);state=await C.finish(input,state);const result=C.result(input,state);assert.equal(result.complete,true);assert.deepEqual(result.assigns,[3,3,3,3,0,0]);assert.equal(result.spike_count,6);assert.ok(result.operations.length>=7);});
+test('Phase 1 completion opens pair tasks; merge requires reinspection and Discard preserves memberships',async()=>{
+ let {input,state}=fixture();
+ state=await apply(input,state,task(1),'SPLIT');
+ for(const cid of [1,2,3])state=await apply(input,state,task(cid),'KEEP');
+ assert.equal(state.phase,'phase2');
+ assert.ok(C.tasks(input,state).every(t=>t.target&&t.phase==='phase2'));
+ state=await apply(input,state,task(1,'phase2',3),'MERGE');
+ assert.equal(state.phase,'phase1');
+ assert.deepEqual(C.clusterTasks(input,state).map(t=>t.source),[3]);
+ assert.deepEqual(Array.from(C.assignments(input,state)),[3,3,3,3,2,2]);
+ state=await apply(input,state,task(3),'KEEP');
+ assert.equal(state.phase,'phase2');
+ const before=await C.stateHash(input,state);
+ state=await apply(input,state,task(2,'phase2',3),'DISCARD');
+ assert.deepEqual(Array.from(C.assignments(input,state)),[3,3,3,3,2,2]);
+ assert.equal(await C.stateHash(input,state),before);
+ assert.equal(C.isDiscarded(state,2),true);
+ assert.deepEqual(C.clusterTasks(input,state),[]);
+ assert.deepEqual(C.pairTasks(input,state),[]);
+ state=await C.finish(input,state);
+ const result=C.result(input,state);
+ assert.equal(result.complete,true);
+ assert.deepEqual(result.assigns,[3,3,3,3,2,2]);
+ assert.deepEqual(result.discarded_cluster_ids,[2]);
+ assert.deepEqual(result.clusters,[{cluster_id:2,n_spikes:2,status:'discarded'},{cluster_id:3,n_spikes:4,status:'kept'}]);
+ assert.equal(result.spike_count,6);
+ assert.ok(result.operations.length>=7);
+});
 test('invalid phase, stale version, self-merge and leaf split never mutate the working state',async()=>{const {input,state}=fixture(),original=JSON.stringify(state);await assert.rejects(apply(input,state,task(1),'MERGE'),/context/);await assert.rejects(apply(input,state,task(2),'SPLIT'),/split/);await assert.rejects(C.apply(input,state,task(1),{action:'KEEP'},99),/changed/);const pair={...state,phase:'phase2'};await assert.rejects(apply(input,pair,task(1,'phase2',1),'MERGE'),/active clusters/);assert.equal(JSON.stringify(state),original);});
 test('undo restores assignments and phase while retaining an audit event and independent reviewer input',async()=>{const {input,state}=fixture(),next=await apply(input,state,task(1),'SPLIT'),undone=await C.undo(input,next,'reviewer-a');assert.deepEqual(Array.from(C.assignments(input,undone)),[1,1,1,1,2,2]);assert.equal(undone.version,2);assert.equal(undone.events.at(-1).type,'undo');assert.equal(C.initial(input,'reviewer-b').events.length,0);assert.equal(state.labels[1],1);});
 test('reference annotations require the exact state, phase, source and target',async()=>{const {data,input,state}=fixture(),hash=await C.stateHash(input,state);data.references=[{state_sha256:hash,phase:'phase1',source:1,target:null,action:'SPLIT',reason:'Two populations'}];assert.equal(C.reference(input,hash,task(1)).length,1);assert.equal(C.reference(input,'other',task(1)).length,0);assert.equal(C.reference(input,hash,task(2)).length,0);assert.equal(C.reference(input,hash,task(1,'phase2',2)).length,0);assert.equal(C.reference(input,hash,task(2)).some(r=>r.action==='KEEP'),false);});
@@ -54,4 +81,42 @@ test('independent manual partitions retain their exact original cluster IDs when
 });
 test('retained independent Agent agreements keep provenance without inventing a new model response',async()=>{
  const {input,state,data}=fixture();let s=await apply(input,state,C.task(1),'SPLIT');const id=s.events.at(-1).id;data.agent_suggestions.push({state_sha256:await C.stateHash(input,s),phase:'phase1',source:2,target:null,agent_id:'Agent_1',action:'KEEP'});s=await C.apply(input,s,C.task(2),{action:'KEEP',agree:true,agent_id:'Agent_1'},s.version);const suggestions=JSON.stringify(data.agent_suggestions),out=await C.revisionBase(input,s,id),retained=C.retainedOperations(out.state.events).at(-1);assert.equal(retained.choice.agree,true);assert.ok(retained.replayed_from);assert.equal(retained.revision_of,id);assert.equal(JSON.stringify(data.agent_suggestions),suggestions);assert.equal(out.state.kept[2],C.signature(out.state,2));
+});
+
+test('default Discard preserves waveforms, metrics and state hash; Keep and Undo restore the correct label',async()=>{
+ const {input,state}=fixture(),original=JSON.stringify(state),hash=await C.stateHash(input,state),before=C.units(input,state),metrics=C.unitMetrics(input,state);
+ const discarded=await apply(input,state,C.task(1),'DISCARD');
+ assert.equal(discarded.events.at(-1).choice.discard_mode,'label');
+ assert.equal(discarded.events.at(-1).execution_status,'recorded_no_membership_change');
+ assert.equal(await C.stateHash(input,discarded),hash);
+ assert.deepEqual(C.units(input,discarded),before);
+ assert.deepEqual(C.unitMetrics(input,discarded),metrics);
+ assert.deepEqual(C.clusterTasks(input,discarded).map(t=>t.source),[2]);
+ assert.deepEqual(C.pairTasks(input,discarded),[]);
+ const kept=await apply(input,discarded,C.task(1),'KEEP');
+ assert.equal(C.isDiscarded(kept,1),false);
+ assert.equal(kept.kept[1],C.signature(kept,1));
+ const undoneKeep=await C.undo(input,kept,'reviewer-a');
+ assert.equal(C.isDiscarded(undoneKeep,1),true);
+ const undoneDiscard=await C.undo(input,undoneKeep,'reviewer-a');
+ assert.equal(C.isDiscarded(undoneDiscard,1),false);
+ assert.deepEqual(C.clusterTasks(input,undoneDiscard).map(t=>t.source),[1,2]);
+ assert.equal(await C.stateHash(input,undoneDiscard),hash);
+ assert.equal(JSON.stringify(state),original);
+});
+
+test('explicit legacy Discard removal still exports zero labels and Undo restores every spike',async()=>{
+ const {input,state}=fixture(),original=JSON.stringify(state),hash=await C.stateHash(input,state);
+ const removed=await C.apply(input,state,C.task(2),{action:'DISCARD',discard_mode:'remove',reason:'Legacy noise removal'},state.version);
+ assert.deepEqual(Array.from(C.assignments(input,removed)),[1,1,1,1,0,0]);
+ assert.equal(C.units(input,removed).reduce((n,u)=>n+u.n,0),4);
+ assert.equal(removed.events.at(-1).execution_status,'applied');
+ assert.notEqual(await C.stateHash(input,removed),hash);
+ const result=C.result(input,removed);
+ assert.deepEqual(result.assigns,[1,1,1,1,0,0]);
+ assert.deepEqual(result.discarded_cluster_ids,[]);
+ const restored=await C.undo(input,removed,'reviewer-a');
+ assert.equal(await C.stateHash(input,restored),hash);
+ assert.deepEqual(Array.from(C.assignments(input,restored)),[1,1,1,1,2,2]);
+ assert.equal(JSON.stringify(state),original);
 });

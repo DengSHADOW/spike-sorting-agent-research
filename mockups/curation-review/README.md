@@ -359,10 +359,18 @@ that reviewer's saved snapshot annotations from the Runpod backend or free-site
 browser adapter. Other reviewers' workspaces are excluded; explicitly inherited
 contributions retain their actor and parent-workspace provenance.
 
-- **History** lists working decisions/operations and the latest annotation for
-  each saved snapshot, across datasets. Working operations and annotation-only
-  records have explicit labels. Undo, superseded judgments and judgments for
-  earlier memberships are distinguished, without changing the stored journal.
+- **History** lists effective working decisions/operations and the latest
+  annotation for each saved snapshot, across datasets. Undone and superseded
+  working records are excluded; Undo restores the previous effective judgment,
+  even when membership hashes are unchanged. Judgments for earlier memberships
+  retain their label. **Revisions** keeps the full audit trail, including undone
+  and superseded records; the stored journal is never rewritten.
+- Working **Discard** defaults to a `discarded` label. The cluster's spikes,
+  waveforms, membership hash and exported assignments stay intact; pending
+  review/comparison tasks exclude it, and exports include its status and
+  `discarded_cluster_ids`. Keep clears the label and Undo restores the previous
+  judgment. Explicit legacy `discard_mode: "remove"` operations still set the
+  selected cluster's assignments to zero and remain reversible.
 - **Revisions** includes each save/edit/undo/finish/continuation. Expand the
   record for spike counts before/after, judgment-field diffs, contributor, version,
   affected pair and state hashes. Undo links to its exact event/version, including
