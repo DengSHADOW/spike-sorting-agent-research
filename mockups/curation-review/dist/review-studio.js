@@ -2,18 +2,42 @@
 'use strict';
 window.ReviewStudio=(()=>{
  const C=CurationCore, wave=$('#evidence-content'), nativeEvidence=renderEvidence, nativeActions=renderActions, nativeQueue=renderQueue;
- let metric='timing',pendingMerge=null,workingContext=null,waveKey='',positiveKey='',targetObserver=null,workDisplay='both',workPopulationKey='';
+ let metric='timing',pendingMerge=null,workingContext=null,waveKey='',targetObserver=null,workDisplay='both',workPopulationKey='';
  const workOpacities=new Map();
  const projections=new WeakMap();let projectionId=0;
  const nativeAgentMenu=renderAgentMenu;
- function actionOf(text){const value=String(text||'').trim().replace(/^AI\s*[·:]\s*/i,'').toUpperCase();for(const id of ['NOT_MERGE','DISCARD','SPLIT','MERGE','KEEP','DEFER'])for(const label of [id,ACTIONS[id]?.label?.toUpperCase()])if(label&&(value===label||value.startsWith(label+' ')||value.startsWith(label+' ·')))return id;return '';}
+ function actionOf(text){const value=String(text||'').trim().replace(/^AI\s*[·:]\s*/i,'').toUpperCase();if(value==='DISCARDED')return 'DISCARD';for(const id of ['NOT_MERGE','DISCARD','SPLIT','MERGE','KEEP','DEFER'])for(const label of [id,ACTIONS[id]?.label?.toUpperCase()])if(label&&(value===label||value.startsWith(label+' ')||value.startsWith(label+' ·')))return id;return '';}
+ async function confirmGroupingEdit(plan){
+  return new Promise(resolve=>{
+   const dialog=document.createElement('dialog');dialog.className='grouping-edit-dialog';dialog.setAttribute('aria-labelledby','grouping-edit-title');
+   const op=plan.operation,restored=plan.restored_clusters.map(u=>'Cluster '+u.id+' ('+u.n.toLocaleString()+' spikes)').join(', '),later=plan.removed.slice(1);
+   dialog.innerHTML='<h2 id="grouping-edit-title">Edit saved '+escapeHtml(op.action)+'?</h2><p>Replacing this action restores '+escapeHtml(restored||'the grouping before this operation')+'. Its resulting grouping and origin tags will be reverted.</p><p>'+later.length+' later dependent decision'+(later.length===1?'':'s')+' will be withdrawn. '+plan.preserved.length+' independent decision'+(plan.preserved.length===1?'':'s')+' will be retained.</p>'+(later.length?'<details><summary>Affected later decisions</summary><ul>'+later.map(e=>'<li>'+escapeHtml(e.action)+' · Cluster '+e.source+(e.target!=null?' + '+e.target:'')+'</li>').join('')+'</ul></details>':'')+'<p class="input-help">Nothing is saved until you confirm a replacement action. To judge the resulting cluster while keeping this grouping, choose Review result.</p><div class="input-actions"><button type="button" data-revision-answer="cancel" class="button">Cancel</button><button type="button" data-revision-answer="review" class="button">Review result · keep '+escapeHtml(op.action)+'</button><button type="button" data-revision-answer="replace" class="button primary">Replace saved '+escapeHtml(op.action)+'</button></div>';
+   const finish=value=>{dialog.close();dialog.remove();resolve(value);};for(const b of dialog.querySelectorAll('[data-revision-answer]'))b.onclick=()=>finish(b.dataset.revisionAnswer);dialog.addEventListener('cancel',e=>{e.preventDefault();finish('cancel');});document.body.append(dialog);dialog.showModal();
+  });
+ }
+ function syncRevisionNotice(){
+  let notice=$('#grouping-edit-notice');const revision=WorkingReview.revision;
+  if(!revision){notice?.remove();return;}
+  if(!notice){notice=document.createElement('section');notice.id='grouping-edit-notice';notice.className='grouping-edit-notice';$('#review-editor').before(notice);}
+  const text='Editing saved '+revision.operation.action+' · restored grouping preview. Confirm to save.';
+  if(notice.dataset.eventId!==revision.event_id){notice.dataset.eventId=revision.event_id;notice.innerHTML='<strong>'+escapeHtml(text)+'</strong><button type="button" class="text-button">Cancel edit</button>';notice.querySelector('button').onclick=()=>WorkingReview.cancelChoice();}
+ }
+ function decorateOrigins(){window.InterfaceUI?.decorateHistory();}
+
  function decorateActions(){
-  for(const tag of document.querySelectorAll('#case-list .queue-review-label'))if(tag.textContent.trim()==='Pending')tag.hidden=true;
-  for(const node of document.querySelectorAll('.queue-action-tag,.agent-object-label,.suggestion-action,.choice-action,#action-grid [data-action]')){
+  for(const meta of document.querySelectorAll('#case-list .queue-item-meta')){
+   const tags=[...meta.querySelectorAll('.queue-action-tag')],hasDraft=tags.some(tag=>tag.classList.contains('draft-tag')&&!tag.hidden);
+   for(const tag of tags){const text=tag.textContent.replace(/\s*·\s*(?:Saved|Draft|Preview)\s*$/i,'');if(tag.textContent!==text)tag.textContent=text;}
+   let badge=meta.querySelector('.queue-draft-label');
+   if(hasDraft&&!badge){badge=document.createElement('span');badge.className='queue-draft-label';badge.textContent='Draft';meta.append(badge);}else if(!hasDraft)badge?.remove();
+  }
+  for(const tag of document.querySelectorAll('#case-list .queue-review-label'))if(['Pending','Reviewed','✓ Reviewed'].includes(tag.textContent.trim()))tag.hidden=true;
+  for(const node of document.querySelectorAll('.queue-action-tag,.agent-object-label,.suggestion-action,.choice-action,.cluster-origin-label,#action-grid [data-action]')){
    const action=node.dataset.action||node.dataset.agentAction||actionOf(node.querySelector('strong')?.textContent||node.textContent);
    if(action&&node.dataset.reviewAction!==action)node.dataset.reviewAction=action;
   }
   for(const option of [...$('#agent-choice').options])if(!['Agent_1','Agent_2'].includes(option.value))option.remove();
+  decorateOrigins();
  }
  renderAgentMenu=function(){const value=nativeAgentMenu();decorateActions();return value;};
  let decorationQueued=false;
@@ -40,7 +64,7 @@ window.ReviewStudio=(()=>{
   select.innerHTML='<option value="" disabled>'+ (action?'Choose your reason':'Choose an action first')+'</option><option value="__new__">Type new reason…</option>'+generalReasonRows.map((r,i)=>'<option value="'+i+'">'+escapeHtml(r.text)+'</option>').join('');
   select.disabled=!ActionReasons.ACTIONS.includes(action);select.value=select.disabled?'':forceCustom||note?'__new__':found>=0?String(found):original?'__new__':'';
   $('#custom-reason-input').hidden=select.value!=='__new__';$('#reason-options').innerHTML=generalReasonRows.map(r=>'<option value="'+escapeHtml(r.text)+'"></option>').join('');
-  $('#general-reason-status').textContent=action?ACTIONS[action].label+' · '+generalReasonRows.length+' reasons':'Choose an action to see its reasons.';
+  $('#general-reason-status').textContent=action?ACTIONS[action].label+' · '+generalReasonRows.length+' reasons':'';
  };
  saveReview=async function(){
   const working=isWorkingReview(),id=currentCase().id,version=working?WorkingReview.state.version:revisions[id]||0;
@@ -57,12 +81,13 @@ window.ReviewStudio=(()=>{
   nativeTypography();
   for(const svg of document.querySelectorAll('#studio-wave-content svg,#evidence-content svg,#modal-content svg')){
    const width=svg.clientWidth;if(!width||!svg.viewBox.baseVal.width)continue;
-   if(!svg.dataset.studioViewBox)svg.dataset.studioViewBox=svg.getAttribute('viewBox');
+   if(!svg.dataset.studioViewBox)svg.dataset.studioViewBox=svg.dataset.axisBaseViewBox||svg.getAttribute('viewBox');
    const original=svg.dataset.studioViewBox.trim().split(/[ ,]+/).map(Number);if(original.length!==4||!original.every(Number.isFinite))continue;
-   const pad=Math.max(0,(440-width)*.26),[x,y,w,h]=original;
+   const pad=Math.max(document.body.classList.contains('studio-compact-screen')?28:0,(440-width)*.26),[x,y,w,h]=original;
    svg.setAttribute('viewBox',[x-pad,y-pad*.2,w+pad*1.6,h+pad*.5].join(' '));
    const size=Math.max(11,Math.min(14,(parseFloat(getComputedStyle(svg.closest('.plot-card')||svg).fontSize)||14)*.9));
    svg.style.setProperty('--chart-label-size',size*(w+pad*1.6)/width+'px');
+   spaceYAxisTitle(svg);
   }
  };
 
@@ -92,12 +117,14 @@ window.ReviewStudio=(()=>{
  const actionField=$('.action-fieldset');$('#review-editor').insertBefore(actionField,$('#correction-panel'));
  const undo=document.createElement('button');undo.id='studio-undo';undo.type='button';undo.title='Undo';undo.setAttribute('aria-label','Undo');undo.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5 3 11l6 6M3 11h11a6 6 0 0 1 0 12" transform="translate(0 -3)"/></svg>';$('.decision-heading').append(undo);
  $('#queue-filters').open=false;
+ document.addEventListener('click',event=>{if(!event.target.closest('#inline-start-working,#manage-inputs'))return;const c=currentCase();if(!c||c.synthetic!==false)return;try{localStorage.setItem('spikeagent-quality-context:'+reviewerId,JSON.stringify({dataset_id:c.dataset_id,channel:c.channel,mat_sha256:c.mat_sha256,state_sha256:c.state_sha256,units:c.units.map(u=>({cluster_id:u.cluster_id}))}));}catch{}},true);
+ // The Studio exposes sort/search only; removed controls must not leave hidden restrictions.
+ filter='all';queueFileSelection='all';$('#phase-filter').value='all';
+ for(const button of document.querySelectorAll('[data-filter]'))button.classList.toggle('active',button.dataset.filter==='all');
  const navLink=$('.studio-link');
  const originalShow=showView;
- showView=function(name){const result=originalShow(name);navLink.classList.toggle('active',name==='review');$('.nav-item[data-view=review]').classList.remove('active');syncUndo();requestAnimationFrame(()=>window.dispatchEvent(new Event('resize')));return result;};
- $('.nav-item[data-view=review]').onclick=()=>{
-  const url=new URL('index.html',location.href);url.search=location.search;location.href=url.pathname+url.search+'#review';
- };
+ showView=function(name){const result=originalShow(name);navLink.classList.toggle('active',name==='review');syncUndo();requestAnimationFrame(()=>window.dispatchEvent(new Event('resize')));return result;};
+
  navLink.onclick=event=>{event.preventDefault();if(currentView!=='review')showView('review');};
 
  function compactQueue(){
@@ -126,13 +153,14 @@ window.ReviewStudio=(()=>{
   wave.setAttribute('aria-labelledby','evidence-tab-'+metric);tabsViewed.add('detail');tabsViewed.add(metric);return metric;
  }
  function syncUndo(){
-  const working=isWorkingReview(),waiting=!!pendingMerge||isDirty;
+  const working=isWorkingReview(),waiting=!!pendingMerge||isDirty||!!WorkingReview.revision;
   undo.disabled=saving||!!WorkingReview.busy||!(waiting||(working?WorkingReview.state?.undo?.length:state.reviews[currentCase()?.id]));
-  undo.title=waiting?'Undo unsaved choice':working?'Undo last grouping operation':'Undo this saved review';undo.setAttribute('aria-label',undo.title);
+  const last=working?CurationCore.retainedOperations(WorkingReview.state?.events).at(-1):null;
+  undo.title=waiting?'Cancel unsaved choice':working?(last?'Undo last saved '+(last.choice?.action||'FINISH')+' (v'+last.version+')'+(last.task?' · Cluster '+[last.task.source,last.task.target].filter(id=>id!=null).join(' + '):''):'No saved action to undo'):'Undo this saved review';undo.setAttribute('aria-label',undo.title);
  }
  undo.onclick=async()=>{
   if(undo.disabled)return;
-  if(isDirty||pendingMerge)clearSelectedAction();
+  if(isDirty||pendingMerge||WorkingReview.revision)clearSelectedAction();
   else if(isWorkingReview())await WorkingReview.undo();
   else if(state.reviews[currentCase().id])await undoReview(currentCase().id,true);
   syncUndo();
@@ -145,7 +173,7 @@ window.ReviewStudio=(()=>{
  function syncActions(){
   const c=currentCase();if(!c)return;
   const compareLabel=$('#evidence-context>label');if(compareLabel?.firstChild?.nodeType===Node.TEXT_NODE)compareLabel.firstChild.textContent='Compare';
-  decorateActions();compactHeader();
+  decorateActions();compactHeader();syncRevisionNotice();
   if(pendingMerge&&pendingMerge!==contextKey()){pendingMerge=null;showTargets();}
   const grid=$('#action-grid');grid.querySelector('[data-action=DEFER]')?.remove();
   let merge=grid.querySelector('[data-action=MERGE]');
@@ -157,16 +185,15 @@ window.ReviewStudio=(()=>{
   split.disabled=saving||!!WorkingReview.busy||!splittable;split.title=!splittable?'Split requires at least two spikes and a valid source':comparisonTarget(c)?'Split '+sourceUnit(c).title+'; end the comparison':'Split '+sourceUnit(c).title;
   if(!split.dataset.studioBound){const original=split.onclick;split.dataset.studioBound='true';split.onclick=()=>{if(comparisonTarget(currentCase())){const carry=captureText();selectComparison('');restoreText(carry);$('#action-grid [data-action=SPLIT]').click();}else original?.();};}
   const chosen=pendingMerge?'MERGE':draft.action;
+  $('#correction-panel .reason-section').hidden=!chosen||draft.agree===true;
   for(const button of grid.querySelectorAll('[data-action]')){const active=button.dataset.action===chosen;button.classList.toggle('selected',active);button.setAttribute('aria-pressed',String(active));}
   if(!merge.dataset.studioBound){const original=merge.onclick;merge.dataset.studioBound='true';merge.onclick=()=>{if(comparisonTarget(c)){if(original)original();else applyMerge(comparisonTarget(c));}else beginMerge();};}
-  const agreed=draft.agree===true&&!$('.agreement-fieldset').hidden,key=stateKey()+':'+agreed;
-  $('#positive-panel').hidden=!agreed;
-  if(key!==positiveKey){$('#positive-panel').open=false;positiveKey=key;}
+  $('#positive-panel').hidden=true;
   if(pendingMerge){
    const comparison=$('#compare-with');if(comparison)comparison.onchange=()=>applyMerge(comparison.value);
    $('#merge-controls').hidden=false;$('#merge-source').textContent='Source: '+sourceUnit(c).title;$('#merge-target').innerHTML='<option value="">Choose above or select a target…</option>'+Core.candidates(c).map(u=>'<option value="'+escapeHtml(u.id)+'">'+escapeHtml(u.title)+'</option>').join('');$('#merge-target').value='';$('#merge-target').onchange=()=>applyMerge($('#merge-target').value);
    $('#action-context').innerHTML='<p class="action-hint">Choose the other cluster in the gallery above.</p>';$('#save-button').disabled=true;$('#save-button').textContent='Choose merge target';
-  }else if(isWorkingReview()&&WorkingReview.preview){$('#action-context').innerHTML='<p class="action-hint">Inspect both panels, then confirm.</p>';}
+  }else if(isWorkingReview()&&WorkingReview.preview){$('#action-context').replaceChildren();}
   const reasonKey=stateKey()+':'+comparisonTarget(c)+':'+reasonAction();if(reasonKey!==reasonRenderKey){reasonRenderKey=reasonKey;renderReasons();}
   syncUndo();
  }
@@ -203,7 +230,7 @@ window.ReviewStudio=(()=>{
   const c=currentCase(),units=[sourceUnit(c),...Core.candidates(c)];
   picker.innerHTML='<p class="studio-target-caption">'+escapeHtml(sourceUnit(c).title)+' · choose a merge target</p><div class="studio-target-grid">'+units.map(u=>'<button type="button" class="case-item queue-thumb-card '+(u.id===c.source?'studio-target-source':'')+'" data-studio-target="'+escapeHtml(u.id)+'" '+(u.id===c.source?'disabled':'')+'><span class="queue-thumb-title">'+escapeHtml(u.title)+'</span><span class="queue-wave-preview"><canvas width="360" height="160" role="img" aria-label="'+escapeHtml(u.title)+' real waveform thumbnail"></canvas><span class="queue-wave-loading">Loading…</span></span><span class="queue-thumb-count">'+u.spikes.toLocaleString()+' spikes</span><span class="queue-thumb-quality">'+(u.id===c.source?'Source':'Merge target')+'</span></button>').join('')+'</div>';
   for(const b of picker.querySelectorAll('[data-studio-target]'))b.onclick=()=>applyMerge(b.dataset.studioTarget);
-  targetObserver=new IntersectionObserver(rows=>{for(const row of rows)if(row.isIntersecting){targetObserver.unobserve(row.target);const canvas=row.target,u=c.units.find(u=>u.id===canvas.closest('button').dataset.studioTarget);if(isWorkingReview()&&workingContext){workingContext.view.draw(canvas,canvas.nextElementSibling,WorkingReview.state.labels,[{id:u.cluster_id,color:u.id===c.source?FULL_WAVEFORM_COLORS[0]:FULL_WAVEFORM_COLORS[1]}],true,1,()=>{canvas.nextElementSibling.hidden=true;},null,null,'all',WorkingReview.state.row_labels||{});}else if(c.synthetic===false)paintQueueThumbnail(canvas,{...c,source:u.id});else{canvas.nextElementSibling.textContent='Synthetic demo';}}},{root:queue,rootMargin:'70px'});
+  targetObserver=new IntersectionObserver(rows=>{for(const row of rows)if(row.isIntersecting){targetObserver.unobserve(row.target);const canvas=row.target,u=c.units.find(u=>u.id===canvas.closest('button').dataset.studioTarget);if(isWorkingReview()&&WorkingReview.server){WorkingReview.drawThumbnail(canvas,u.cluster_id);canvas.nextElementSibling.hidden=true;}else if(isWorkingReview()&&workingContext){workingContext.view.draw(canvas,canvas.nextElementSibling,WorkingReview.state.labels,[{id:u.cluster_id,color:u.id===c.source?FULL_WAVEFORM_COLORS[0]:FULL_WAVEFORM_COLORS[1]}],true,1,()=>{canvas.nextElementSibling.hidden=true;},null,null,'all',WorkingReview.state.row_labels||{});}else if(c.synthetic===false)paintQueueThumbnail(canvas,{...c,source:u.id});else{canvas.nextElementSibling.textContent='Synthetic demo';}}},{root:queue,rootMargin:'70px'});
   for(const canvas of picker.querySelectorAll('canvas'))targetObserver.observe(canvas);
  }
  function renderSnapshot(){
@@ -294,11 +321,12 @@ window.ReviewStudio=(()=>{
   handle.onkeydown=e=>{if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home'].includes(e.key))return;e.preventDefault();change(e.key==='Home'?initial():read()+(e.key==='ArrowLeft'||e.key==='ArrowDown'?18:-18));requested=read();try{localStorage.setItem(key,String(requested));}catch{}syncPlotTypography();};
   handle.ondblclick=()=>{requested=null;try{localStorage.removeItem(key);}catch{}change(initial());syncPlotTypography();};
   window.addEventListener('resize',()=>{if(handle.offsetParent)change(requested??(defaultSize?initial():axis==='x'?Math.min(370,Math.max(250,innerWidth*.24)):Math.min(285,Math.max(180,innerHeight*.27))));});
-  return ()=>change(requested??read());
+  return ()=>change(requested??(defaultSize?initial():read()));
  }
  resizer($('.panel-resizer[data-resize=decision]'),'x',()=>$('#decision-panel').getBoundingClientRect().width,n=>workspace.style.setProperty('--studio-decision-width',n+'px'),()=>[240,Math.min(580,workspace.clientWidth*(innerWidth<=1100?.29:.46))],'spikeagent-studio-decision-width');
  resizer(galleryResize,'y',()=>queue.getBoundingClientRect().height,n=>center.style.setProperty('--studio-gallery-height',n+'px'),()=>[130,Math.max(160,innerHeight-600)],'spikeagent-studio-gallery-height');
  const fitEvidence=resizer(evidenceResize,'x',()=>columns.lastElementChild.getBoundingClientRect().width,n=>columns.style.setProperty('--studio-metric-width',n+'px'),()=>{const available=columns.clientWidth-8,min=Math.min(220,available*.32);return [min,available-min];},'spikeagent-studio-metric-width',()=>(columns.clientWidth-8)/2);
  new ResizeObserver(()=>{if(evidenceResize.offsetParent)fitEvidence();}).observe(columns);
- return {active:true,agentSlots:['Agent_1','Agent_2'],syncActions,renderWorking,get pendingMerge(){return !!pendingMerge;},get metric(){return metric;}};
+ let typographyFrame;const typographyResize=new ResizeObserver(()=>{cancelAnimationFrame(typographyFrame);typographyFrame=requestAnimationFrame(syncPlotTypography);});typographyResize.observe(columns.firstElementChild);typographyResize.observe(columns.lastElementChild);
+ return {active:true,agentSlots:['Agent_1','Agent_2'],syncActions,renderWorking,metricTab,confirmGroupingEdit,get pendingMerge(){return !!pendingMerge;},get metric(){return metric;}};
 })();

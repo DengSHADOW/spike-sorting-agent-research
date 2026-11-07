@@ -7,15 +7,20 @@
  const changes=(a,b,fields)=>fields.filter(k=>!same(a?.[k],b?.[k])).map(k=>({field:k,before:copy(a?.[k]),after:copy(b?.[k])}));
  const countChanges=(before,after)=>{if(!Array.isArray(before)||!Array.isArray(after))return [];const a=new Map(before.map(u=>[u.id,u.n])),b=new Map(after.map(u=>[u.id,u.n]));return [...new Set([...a.keys(),...b.keys()])].sort((x,y)=>x-y).filter(id=>(a.get(id)||0)!==(b.get(id)||0)).map(id=>({cluster:id,before:a.get(id)||0,after:b.get(id)||0}));};
  const clusterIds=r=>[...new Set((r.judgment_pair||r.expert_pair||[r.source_cluster??r.current_cluster]).filter(Number.isSafeInteger))];
+ function origin(record){const action=record?.choice?.action||record?.action,source=record?.task?.source??record?.source,target=record?.task?.target??record?.target;if(!Number.isSafeInteger(source)||source<=0)return '';if(action==='SPLIT')return 'Split from Cluster '+source;if(action==='MERGE'&&Number.isSafeInteger(target)&&target>0&&target!==source)return 'Merged from Clusters '+source+' + '+target;return '';}
  function working(workspaces){
   const history=[],revisions=[],summaries=[];
   for(const s of workspaces){
    const stack=[],records=[],signatures=new Map();for(let i=0;i<s.labels.length;i++){const cid=s.labels[i];if(cid>0){if(!signatures.has(cid))signatures.set(cid,[]);signatures.get(cid).push(i);}}
-   const pending=[...signatures].filter(([cid,ids])=>s.kept[cid]!==ids.join(',')).length;
+   const overrides=Object.entries(s.row_labels||{}).sort((a,b)=>Number(a[0])-Number(b[0]));for(const [,v] of overrides)if(v.cluster>0&&!signatures.has(v.cluster))signatures.set(v.cluster,[]);
+   const lastMembership=[...(s.events||[])].reverse().find(e=>['choice_applied','undo'].includes(e.type));
+   if(lastMembership?.counts_after){const active=new Set(lastMembership.counts_after.filter(u=>u.n>0).map(u=>u.id));for(const cid of signatures.keys())if(!active.has(cid))signatures.delete(cid);}
+   for(const [cid,ids] of signatures){const rows=overrides.filter(([,v])=>v.cluster===cid||s.labels[v.atom]===cid).map(([row,v])=>row+'='+v.cluster);signatures.set(cid,ids.join(',')+(rows.length?'|rows:'+rows.join(','):''));}
+   const pending=[...signatures].filter(([cid,sig])=>s.kept[cid]!==sig&&s.discarded?.[cid]!==sig).length;
    summaries.push({id:s.workspace_id,dataset_id:s.dataset_id,recording_id:s.recording_id||s.dataset_id,reviewer:s.reviewer,version:s.version,clusters:signatures.size,pending,complete:s.complete,parent:s.parent_workspace||null,source_sha256:s.source_sha256,updated_at:s.updated_at||''});
    for(const [i,e] of (s.events||[]).entries()){
     if(!e||!['choice_applied','undo','finished','continued_imported_workspace'].includes(e.type))continue;
-    let undone=null;if(e.type==='undo'){undone=stack.pop()||null;if(undone)undone.status='undone';}
+    let undone=null;if(e.type==='undo'){undone=stack.pop()||null;if(undone)undone.status='undone';if(e.restored_operation_ids){const known=new Map(records.map(r=>[r.raw.id,r]));stack.splice(0,stack.length,...e.restored_operation_ids.map(id=>known.get(id)).filter(Boolean));}}
     const beforeCounts=e.counts_before||(undone?undone.raw.counts_after:null),afterCounts=e.counts_after||(undone?undone.raw.counts_before:null),task=e.task||undone?.raw.task||{},counts=countChanges(beforeCounts,afterCounts);
     const row={id:`working:${s.workspace_id}:${e.id||i}`,kind:'working',dataset_id:s.dataset_id,recording_id:s.recording_id||s.dataset_id,workspace_id:s.workspace_id,workspace_label:`Workspace ${s.workspace_id.slice(0,8)}`,origin_workspace_id:e.workspace_id||null,case_id:null,version:Number.isInteger(e.version)?e.version:null,actor:e.reviewer||s.reviewer,agent:e.choice?.agent_id||null,timestamp:date(e.timestamp),event:e.type,action:e.choice?.action||(e.type==='undo'?'UNDO':e.type==='finished'?'FINISH':'IMPORT'),affected_action:undone?.action||null,clusters:[...new Set([task.source,task.target,...counts.map(c=>c.cluster)].filter(Number.isSafeInteger))],source:task.source??null,target:task.target??null,reason:e.choice?.reason||'',note:e.choice?.note||e.note||'',confidence:e.choice?.confidence||null,status:e.type==='undo'?'undone':e.type==='finished'?'finished':e.type==='continued_imported_workspace'?'imported':e.choice?.action==='DEFER'?'deferred':e.execution_status==='applied'?'applied':'recorded',state_before:e.state_before||null,state_after:e.state_after||null,count_changes:counts,changes:[],inherited:!!(e.workspace_id&&e.workspace_id!==s.workspace_id||e.reviewer&&e.reviewer!==s.reviewer||s.parent_workspace&&Number.isInteger(e.version)&&e.version<=s.parent_workspace.version),undo_of:e.undo_of||undone?.raw.id||null,undo_version:e.undone_version??undone?.version??null,raw:e};
     if(e.type==='choice_applied'||e.type==='finished')stack.push(row);
@@ -27,14 +32,14 @@
     row.changes.push(...changes(e.summary_before,e.summary_after,['active_clusters','active_spikes','accepted_clusters','complete']));
     records.push(row);revisions.push(row);
    }
-   const latest=new Map();for(const row of stack)if(row.object_key)latest.set(row.object_key,row);
+   const retained=new Set(stack),latest=new Map();for(const row of stack)if(row.object_key)latest.set(row.object_key,row);
    for(const row of records){
     if(row.event!=='choice_applied')continue;
-    if(row.status!=='undone'&&latest.get(row.object_key)!==row)row.status='superseded';
-    if(!['undone','superseded'].includes(row.status)&&row.raw.object_after&&['KEEP','NOT_MERGE','DEFER'].includes(row.action)){
-     if(Object.entries(row.raw.object_after).some(([cid,sig])=>(signatures.get(Number(cid))?.join(',')??null)!==sig))row.status='earlier_state';
+    row.status=!retained.has(row)?'undone':latest.get(row.object_key)!==row?'superseded':row.action==='DEFER'?'deferred':row.raw.execution_status==='applied'?'applied':'recorded';
+    if(!['undone','superseded'].includes(row.status)&&row.raw.object_after&&['KEEP','NOT_MERGE','DEFER','DISCARD'].includes(row.action)){
+     if(Object.entries(row.raw.object_after).some(([cid,sig])=>(signatures.get(Number(cid))??null)!==sig))row.status='earlier_state';
     }
-    history.push(row);
+    if(!['undone','superseded'].includes(row.status))history.push(row);
    }
   }
   return {history,revisions,workspaces:summaries};
@@ -53,5 +58,5 @@
  function combine(workspaces,payload){const a=working(workspaces),b=snapshots(payload);return {history:[...a.history,...b.history],revisions:[...a.revisions,...b.revisions],workspaces:a.workspaces};}
  function filter(rows,f={}){return rows.filter(r=>(!f.dataset||r.dataset_id===f.dataset)&&(!f.workspace||r.workspace_id===f.workspace)&&(!f.kind||r.kind===f.kind)&&(!f.action||r.action===f.action||r.affected_action===f.action)&&(!f.status||r.status===f.status)&&(!f.actor||r.actor===f.actor)&&(!f.agent||r.agent===f.agent)&&(!f.from||r.timestamp&&r.timestamp.slice(0,10)>=f.from)&&(!f.to||r.timestamp&&r.timestamp.slice(0,10)<=f.to)&&(!f.search||(/^\d+$/.test(f.search.trim())?r.clusters.includes(Number(f.search.trim())):[r.dataset_id,r.recording_id,r.case_id,r.workspace_id,r.reason,r.note,r.action].some(v=>String(v||'').toLocaleLowerCase().includes(f.search.trim().toLocaleLowerCase()))))).sort((a,b)=>Date.parse(b.timestamp||0)-Date.parse(a.timestamp||0)||String(a.workspace_id||'').localeCompare(String(b.workspace_id||''))||(b.version??0)-(a.version??0));}
  function csv(rows){const cols=['kind','dataset_id','recording_id','workspace_id','case_id','version','actor','agent','timestamp','event','action','affected_action','clusters','status','reason','note','state_before','state_after','confidence','inherited','origin_workspace_id','undo_of','undo_version','count_changes','changes'];const cell=v=>{v=Array.isArray(v)?v.some(x=>x&&typeof x==='object')?JSON.stringify(v):v.join(' + '):v&&typeof v==='object'?JSON.stringify(v):String(v??'');if(/^(?:\s*[=+\-@]|[\t\r])/.test(v))v="'"+v;return '"'+v.replace(/"/g,'""')+'"';};return [cols.join(','),...rows.map(r=>cols.map(c=>cell(r[c])).join(','))].join('\r\n');}
- return {working,snapshots,combine,filter,countChanges,csv};
+ return {working,snapshots,combine,filter,countChanges,csv,origin};
 });

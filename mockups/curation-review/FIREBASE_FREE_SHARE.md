@@ -1,5 +1,40 @@
 # Free Firebase Hosting edition — 2026-10-23
 
+## Agent-card-only rollback baseline — 2026-11-02
+
+For this task, the authoritative frontend is Firebase Hosting version
+`dd21f13a7dbf1a4a`, recovered from Hosting rather than an older local build.
+Restore its original Import page, private-upload controls, per-file `Load data`
+channel switching, layout, responsive code, history and other controls. The
+later `firebase-alignment` / `channel-navigation` preview releases are not the
+baseline for this task.
+
+The permitted frontend changes are limited to displaying the uploaded Agent 1/2
+action, rationale and retained replay note; matching unchanged cluster inputs;
+refreshing obsolete public dataset packages without replacing saved workspaces;
+and removing AI labels/outlines from queue thumbnails. HTML changes are only
+cache tags for the changed scripts. The published manifest and two approved
+packages contain the already uploaded Agent outputs. These are retained real
+Agent results, not a newly connected live GPU inference service.
+
+Keep local `dist/` identical to the published frontend/data tree. Local static
+asset routing supports the same files without changing the original Import or
+channel UI. Preserve separate local-only tools. Existing annotations, grouping,
+history and drafts stay in their browser stores. The active browser regression
+for this scope is `tests/test_curation_agent_card_only_browser.cjs`.
+
+Follow-up fixes requested on the same day make Agree / Disagree explicit,
+restore pending feedback to its original Agent, and enable Confirm after a
+reason/note is entered. The card labels its rationale, keeps replay provenance
+collapsed by default, and hides the historical Jacob reference and positive
+feedback editor. Cross-dataset activation clears stale search/filter/scroll
+state so the selected thumbnail is visible; ordinary edits retain their view.
+The reset-success banner is removed while the original reset confirmation and
+scope remain. The original Import page and channel controls are preserved.
+
+The dated sections below document older workflows; this task does not redesign
+them or change their service endpoints.
+
 ## Actual curation in the original page — 2026-10-27
 
 The original `/` Expert review page now also executes curation through **Work on

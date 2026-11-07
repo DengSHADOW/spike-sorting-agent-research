@@ -119,7 +119,7 @@ function candidateISI(data){
   const box=axes(w,h,'ISI (ms)','Interval count',['0','12.5','25','37.5','50'],Array.from({length:5},(_,i)=>tickLabel(high*(1-i/4))));
   const bars=isi.counts.map((count,i)=>`<rect x="${box.l+i/isi.counts.length*box.iw}" y="${box.t+(1-count/high)*box.ih}" width="${box.iw/isi.counts.length}" height="${count/high*box.ih}" fill="#3769a0"/>`).join('');
   const marker=box.l+2/50*box.iw;
-  return `<p class="plot-note">0–50 ms shown · 2 ms marker. Rate uses all ${isi.denominator.toLocaleString()} adjacent intervals (${isi.outside_display_count.toLocaleString()} above 50 ms).</p><svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Recomputed candidate pair ISI histogram with 2 ms marker">${box.markup}<rect x="${box.l}" y="${box.t}" width="${marker-box.l}" height="${box.ih}" fill="#f6dcc0"/>${bars}<path d="M${marker} ${box.t}v${box.ih}" stroke="#8f3b16" stroke-dasharray="5 4" stroke-width="1.5"/></svg>`;
+  return `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Recomputed candidate pair ISI histogram with 2 ms marker">${box.markup}<rect x="${box.l}" y="${box.t}" width="${marker-box.l}" height="${box.ih}" fill="#f6dcc0"/>${bars}<path d="M${marker} ${box.t}v${box.ih}" stroke="#8f3b16" stroke-dasharray="5 4" stroke-width="1.5"/></svg>`;
 }
 function renderPairComparison(c){
   const target=comparisonTarget(c);

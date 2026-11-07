@@ -514,11 +514,44 @@ class Handler(BaseHTTPRequestHandler):
     def request_origin(self):
         return "http://" + self.headers.get("Host", "")
 
+    def published_asset(self, path):
+        """Serve the published frontend tree, never arbitrary project files.
+
+        Public evidence takes priority over the older generated STORE assets.
+        Missing evidence can still use the existing STORE routes below.
+        """
+        if "\\" in path or "\x00" in path or any(
+                part.startswith(".") for part in path.split("/") if part):
+            raise KeyError("Unknown static file")
+        name = "index.html" if path == "/" else path.removeprefix("/")
+        suffix = Path(name).suffix
+        root_asset = bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*\.(?:html|js|css)", name))
+        public_package = (path == "/public-data/manifest.json" or bool(re.fullmatch(
+            r"/public-data/packages/[A-Za-z0-9][A-Za-z0-9_.-]*\.bin", path)))
+        evidence = (path.startswith("/share/") and suffix == ".json" or
+                    path.startswith(("/review-pca/", "/review-waveforms/")) and suffix in (".png", ".json"))
+        if not (root_asset or public_package or evidence):
+            return None
+        root = STATIC.resolve()
+        target = (root / name).resolve()
+        if not target.is_relative_to(root):
+            raise KeyError("Unknown static file")
+        if not target.is_file():
+            return None
+        content_types = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
+                         ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8",
+                         ".png": "image/png", ".bin": "application/octet-stream"}
+        return target.read_bytes(), content_types[suffix]
+
     def do_GET(self):
         try:
             self.check_host()
             path = unquote(urlsplit(self.path).path)
             query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+            published = self.published_asset(path)
+            if published is not None:
+                self.reply(published[0], content_type=published[1])
+                return
             if path == "/api/status":
                 self.reply(dict(status="ready", csrf_token=self.app.csrf, synthetic=False,
                     dataset_id=self.app.bundle["dataset_id"], cases=sum(b["cases"] for b in self.app.datasets.summaries()), n_spikes=self.app.bundle["n_spikes"], model_calls_enabled=False,
@@ -585,17 +618,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path.startswith("/api/"):
                 self.reply(dict(error="Unknown API route"), 404)
             else:
-                name = "index.html" if path == "/" else path.lstrip("/")
-                allowed_files = {"index.html": "text/html; charset=utf-8", "style.css": "text/css; charset=utf-8",
-                    "app.js": "text/javascript; charset=utf-8", "agent-study.js":"text/javascript; charset=utf-8", "cloud-auth.js":"text/javascript; charset=utf-8", "analysis.js":"text/javascript; charset=utf-8", "inputs.js":"text/javascript; charset=utf-8", "review-core.js": "text/javascript; charset=utf-8"}
-                allowed_files.update({name:"text/javascript; charset=utf-8" for name in ("private-data.js","working-import.js","review-quality.js","review-pca.js","pca-core.js","review-working.js","queue-gallery.js","review-correlograms.js","review-reasons.js","reviewer-profiles.js","review-audit.js","closed-agent.js","activity-core.js","activity-ui.js","waveform-worker.js","waveform-view.js","curation-reasons.js","curation-workspace.js")})
-                allowed_files.update({'curation.html':'text/html; charset=utf-8','curation-core.js':'text/javascript; charset=utf-8','curation-ui.js':'text/javascript; charset=utf-8','curation.css':'text/css; charset=utf-8','activity.css':'text/css; charset=utf-8'})
-                allowed_files.update({'review-studio.html':'text/html; charset=utf-8','action-reasons.js':'text/javascript; charset=utf-8','review-studio.js':'text/javascript; charset=utf-8','review-studio.css':'text/css; charset=utf-8'})
-                # Draft of the 2026-10-26 redesign; shares curation-core.js, separate page.
-                allowed_files.update({'review-v2.html':'text/html; charset=utf-8','review-v2.js':'text/javascript; charset=utf-8','review-v2.css':'text/css; charset=utf-8'})
-                if name not in allowed_files:
-                    raise KeyError("Unknown static file")
-                self.reply((STATIC / name).read_bytes(), content_type=allowed_files[name])
+                raise KeyError("Unknown static file")
         except KeyError:
             self.reply(dict(error="Not found"), 404)
         except PermissionError as exc:

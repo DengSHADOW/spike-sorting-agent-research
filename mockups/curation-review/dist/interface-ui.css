@@ -1,0 +1,72 @@
+.review-studio #packet-button{display:none!important}
+.interface-settings-button{margin-top:8px}
+.queue-sort-control{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px}
+#queue-sort-buttons{display:flex;gap:4px;flex-wrap:wrap}
+.sort-option{border:1px solid var(--line);border-radius:6px;background:var(--surface,#fff);color:var(--ink);padding:6px 9px;font-size:12px;cursor:pointer;white-space:nowrap}
+.sort-option.active{background:var(--teal-soft);color:var(--teal);border-color:var(--teal);font-weight:650}
+.cluster-card-wrap{display:flex;flex-direction:column;min-width:0;gap:3px}
+.cluster-card-wrap>.queue-thumb-card{width:100%;flex:1}
+.cluster-history-tag{border:1px solid var(--line);border-radius:5px;background:var(--surface,#fff);color:var(--teal);font-size:11px;padding:5px;cursor:pointer;text-align:center}
+.cluster-history-tag:hover,.cluster-history-tag:focus-visible{border-color:var(--teal);text-decoration:underline}
+.cluster-detail-history{margin-top:8px}
+#cluster-retired-history{margin-top:10px;font-size:12px;color:var(--sub)}
+#cluster-retired-history summary{cursor:pointer;padding:6px 0}
+.retired-cluster-list{display:flex;gap:6px;flex-wrap:wrap;padding:6px 0}
+.hide-session-banner #inline-working-status:not(.session-warning){display:none!important}
+.interface-dialog{max-width:600px;max-height:85vh;overflow:auto}
+.settings-section{padding:16px 0;border-top:1px solid var(--line)}
+.settings-section h3{font-size:15px;margin:0 0 12px}.settings-section summary{cursor:pointer;font-weight:600}
+.settings-fields{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.settings-section label{display:flex;flex-direction:column;gap:6px;font-size:13px}
+.settings-section select{padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--surface,#fff);color:var(--ink)}
+.settings-section .settings-check{flex-direction:row;align-items:center;margin:12px 0}
+.settings-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.settings-section p{margin:8px 0}.session-details{display:grid;grid-template-columns:130px 1fr;gap:12px;margin-top:20px}.session-details dd{margin:0;overflow-wrap:anywhere}.session-details dt{color:var(--sub)}
+.cluster-timeline{display:grid;gap:12px;margin:16px 0;max-height:58vh;overflow:auto}
+.cluster-log-entry{border:1px solid var(--line);border-left:3px solid var(--teal);border-radius:6px;padding:14px;font-size:13px;background:var(--surface,#fff)}
+.cluster-log-entry.highlighted{outline:2px solid var(--teal)}
+.cluster-log-entry header{display:flex;justify-content:space-between;gap:12px}.cluster-log-entry header span,.cluster-log-entry small{color:var(--sub)}
+.cluster-log-entry p{margin:6px 0}.cluster-log-entry ul{padding-left:20px}.cluster-log-entry details{margin-top:8px}.cluster-log-entry code{display:block;font-size:10px;overflow-wrap:anywhere}
+body[data-density=compact] .queue-thumb-card{padding:5px!important}
+body[data-density=compact] .queue-wave-preview{height:52px!important;min-height:52px!important}
+body[data-density=compact] .queue-cluster-grid{gap:5px!important}
+:root[data-theme=dark]{--bg:#121a23;--surface:#1b2733;--ink:#e5edf4;--sub:#a8bacb;--line:#3c4d5d;--teal:#7ad9c4;--teal-soft:#213e3d;--muted:#a8bacb;--amber:#f0c775}
+[data-theme=dark] body{background:var(--bg);color:var(--ink)}
+[data-theme=dark] :is(.topbar,.queue-panel,.evidence-panel,.decision-panel,.studio-wave-panel,.studio-metric-panel,.queue-sticky,.evidence-sticky,.queue-file-group,.queue-thumb-card,.history-card,.revision-card,.activity-record,.activity-group,.user-choice-card,.comparison-choice-card,.plot-card,dialog,.bottom-strip,.queue-file-group>summary){background:var(--surface);color:var(--ink);border-color:var(--line)}
+[data-theme=dark] :is(input,textarea,select,.button,.icon-button,.action-option,.queue-filters-control,.studio-history-state,.activity-filters,.activity-toolbar){background:#202f3d;color:var(--ink);border-color:var(--line)}
+[data-theme=dark] :is(.metrics-table,.metric-table-header,.metric-table-row,.activity-stats>div,.choice-card-heading,.inline-working-status){background:#202f3d;color:var(--ink);border-color:var(--line)}
+[data-theme=dark] :is(.suggestion-card,#agent-card){background:#393522;color:#f1e4bb;border-color:#766542}
+[data-theme=dark] :is(.queue-thumb-card.active,.action-option.selected,.sort-option.active){background:#213e3d;color:#cff5e9;border-color:#7ad9c4}
+[data-theme=dark] :is(.rationale,.choice-reason,.choice-note,.field-help,.input-help,.queue-thumb-quality,.muted,.activity-help){color:var(--sub)}
+[data-theme=dark] :is(.choice-card-heading h3,.case-title-group h2,.queue-heading h2,.decision-heading h2,.modal-heading h2,.metrics strong){color:var(--ink)}
+[data-theme=dark] :is(.plot-key,.packet-code,.activity-record-actions,.activity-record-heading){background:transparent;color:var(--ink)}
+[data-theme=dark] .review-studio :is(.decision-sticky,.studio-wave-toolbar,.search,#metrics,.studio-child-metrics,.studio-child-metrics>header,.stat-card,.revision-flow){background:var(--surface);color:var(--ink);border-color:var(--line)}
+[data-theme=dark] .review-studio #metrics .studio-pair-statistics::before,[data-theme=dark] .review-studio #metrics .studio-pair-statistics::after{background:var(--surface);border-color:var(--line)}
+[data-theme=dark] .review-studio :is(.panel-resizer,.studio-evidence-resizer,.studio-gallery-resizer,.agent-height-resizer){background:#293b49;border-color:var(--line)}
+[data-theme=dark] .review-studio #agent-card :is(summary,.collapse-hint,#suggestion,#suggestion p,.suggestion-label,.suggestion-card){color:#f1e4bb}
+[data-theme=dark] .review-studio :is(.jacob-reference-panel summary,.choice-source,.plot-heading h3){color:var(--sub)}
+[data-theme=dark] .review-studio .choice-text{color:var(--ink)}
+[data-theme=dark] .review-studio :is(.choice-text>span,.choice-empty,.choice-scope-note){color:var(--sub)}
+[data-theme=dark] .review-studio #source-badge{color:#f0c775}
+[data-theme=dark] .review-studio [data-review-action=KEEP]{--action-ink:#8ce4bc;--action-bg:#1b3c32;--action-border:#64b88f}
+[data-theme=dark] .review-studio [data-review-action=SPLIT]{--action-ink:#ffd091;--action-bg:#44331e;--action-border:#cf9e52}
+[data-theme=dark] .review-studio [data-review-action=MERGE]{--action-ink:#a4caff;--action-bg:#253b59;--action-border:#7ba4df}
+[data-theme=dark] .review-studio [data-review-action=NOT_MERGE]{--action-ink:#d8b7ff;--action-bg:#3d2b53;--action-border:#b494d7}
+[data-theme=dark] .review-studio [data-review-action=DISCARD]{--action-ink:#ffb4ac;--action-bg:#4d2d2b;--action-border:#de9992}
+[data-theme=dark] .review-studio [data-review-action=DEFER]{--action-ink:#c6d5e5;--action-bg:#2b3a49;--action-border:#a6bacf}
+[data-theme=dark] .review-studio .action-option .action-icon{color:inherit}
+[data-theme=dark] .review-studio .button.primary{background:#7ad9c4;color:#122c27;border-color:#7ad9c4}
+/* Keep scientific plots on their original light background and preserve trace colors. */
+[data-theme=dark] :is(.queue-wave-preview,.inline-working-wave,.plot-card>svg,.plot-card .plot-svg,.pca-plot){background:#f7fafc;color:#203448;border-radius:4px}
+@media(max-width:650px){.settings-fields{grid-template-columns:1fr}.session-details{grid-template-columns:1fr}.interface-dialog{padding:18px}.sort-option{padding:5px 7px}.queue-sort-control{gap:4px}}
+.dataset-heading{display:flex;align-items:center;gap:8px;min-width:0}
+.dataset-heading>strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.review-studio .dataset-heading .dataset-refresh{flex:none;margin-left:auto;min-height:24px;padding:3px 8px;font-size:12px;line-height:1.4}
+@media(max-width:650px){
+ .review-studio .case-list{width:100%;min-width:0}
+ .review-studio .queue-cluster-grid,.review-studio .studio-target-grid{min-width:0;grid-template-columns:repeat(auto-fit,minmax(120px,1fr))}
+ .review-studio .studio-queue-tools{flex-wrap:wrap}
+ .review-studio .studio-queue-tools .search{flex-basis:100%}
+ .review-studio .queue-file-group>summary{grid-template-columns:12px minmax(0,1fr)}
+ .review-studio .queue-file-group>summary>.file-progress{grid-column:2;grid-row:2}
+}

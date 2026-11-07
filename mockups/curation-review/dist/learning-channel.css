@@ -1,0 +1,9 @@
+.learning-channel-dialog{width:min(760px,calc(100vw - 28px));max-height:calc(100dvh - 32px);overflow:auto}
+.learning-channel-dialog input,.learning-channel-dialog select{display:block;width:100%;margin:5px 0 12px;padding:8px;border:1px solid var(--border,#b5c7d2);border-radius:5px;background:var(--surface,#fff);color:inherit;font:inherit}
+.learning-channel-dialog .settings-actions{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
+.learning-channel-dialog details{margin-top:12px}
+#learning-annotations{max-height:240px;overflow:auto}
+.learning-annotation{border-bottom:1px solid var(--border,#d6e0e6);padding:10px 0;overflow-wrap:anywhere}
+.learning-annotation p{margin:5px 0;white-space:pre-wrap}
+#learning-message{padding:10px 12px;border:1px solid var(--border,#b5c7d2);border-radius:6px;overflow-wrap:anywhere}
+#learning-result{overflow-wrap:anywhere}

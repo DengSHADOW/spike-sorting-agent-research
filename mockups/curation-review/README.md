@@ -449,6 +449,19 @@ Real-data reviews are validated and persisted in SQLite on this Runpod workspace
 its original browser-local v2 storage/export. Both sources include review, history and a conceptual
 revision view. On the Review page, proposed actions are annotations. The separate Curation page executes working-copy edits; neither page starts model inference or learning.
 
+## Current website baseline (2026-11-02)
+
+The frontend in `dist/` follows the recovered Firebase release
+`dd21f13a7dbf1a4a`, retaining its original dataset Import and switching UI.
+The current change is limited to the right-hand Agent card's uploaded
+action/rationale data, public-package cache validation and removal of AI
+thumbnail labels/outlines. See [the scoped rollback contract](FIREBASE_FREE_SHARE.md#agent-card-only-rollback-baseline--2026-11-02).
+The separate local-only tools and local static asset routing are retained.
+The same-day Agent-review corrections also cover working feedback buttons,
+collapsed replay details, the rationale caption, hidden historical reference,
+and stale queue search/filter/scroll when switching datasets. Original Import
+and switching controls remain intact.
+
 ## Local backend (2026-10-23)
 
 Use the project-specific Python 3.12 environment; do not modify `/workspace/.venv`:
@@ -468,8 +481,9 @@ standard library; input-based reviewer analysis also uses the dependencies above
 forward port 8765 in Remote SSH/VS Code, then visit
 `http://localhost:8765`. The CLI importer above is optional when using the browser import manager;
 the server can start with an empty catalog. Existing CH31 data is automatically registered when present.
-The top selector remembers the selected dataset/view; `?source=demo` opens the demo.
-Serving `dist/` alone still offers the demo and shows that the real-data backend is unavailable.
+The current default entry uses the synchronized public CH3 / CH31 datasets.
+The older private/synthetic workflows described in this dated section remain
+separate; serving the complete synchronized `dist/` also supports the public datasets.
 
 Initial verified import:
 

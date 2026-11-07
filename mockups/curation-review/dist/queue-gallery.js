@@ -1,6 +1,19 @@
 'use strict';
 let queueSort='spikes',queueGalleryObserver=null;
 try{if(['isi','quality'].includes(localStorage.getItem('spike-review-queue-sort')))queueSort=localStorage.getItem('spike-review-queue-sort');}catch{}
+let queueDirections={...InterfaceCore.defaults};
+try{const saved=JSON.parse(localStorage.getItem('spike-review-queue-directions')||'{}');for(const key of Object.keys(queueDirections))if(['asc','desc'].includes(saved[key]))queueDirections[key]=saved[key];}catch{}
+function setQueueSort(key,toggle=false){
+ if(!Object.hasOwn(queueDirections,key))return;
+ if(toggle)queueDirections=InterfaceCore.toggle(queueSort,queueDirections,key);
+ queueSort=key;try{localStorage.setItem('spike-review-queue-sort',key);localStorage.setItem('spike-review-queue-directions',JSON.stringify(queueDirections));}catch{}
+ if(typeof WorkingReview!=='undefined'&&WorkingReview.active)WorkingReview.renderQueue();else renderQueue();
+ syncQueueSortControls();
+}
+function syncQueueSortControls(){
+ const host=document.querySelector('#queue-sort-buttons');if(!host)return;
+ host.replaceChildren(...Object.keys(queueDirections).map(key=>{const b=document.createElement('button'),active=queueSort===key,direction=queueDirections[key];b.type='button';b.className='sort-option'+(active?' active':'');b.dataset.sortKey=key;b.setAttribute('aria-pressed',String(active));b.textContent=({spikes:'Spikes',isi:'ISI',quality:'Quality'})[key]+' '+(direction==='desc'?'\u2193':'\u2191');b.title=(key==='quality'?(direction==='asc'?'Best first':'Worst first'):(direction==='asc'?'Ascending':'Descending'))+' \u00b7 click again to reverse';b.setAttribute('aria-label',({spikes:'Spikes',isi:'ISI violations',quality:'Quality'})[key]+': '+b.title);b.onclick=()=>setQueueSort(key,true);return b;}));
+}
 const queueQuality=new Map(),queueEvidenceRequests=new Map();
 const queueQualityKey=(c,u=sourceUnit(c))=>[c.dataset_id,c.state_sha256,u.cluster_id].join(':');
 function queueThumbnailMarkup(c,grouped=false){
@@ -8,7 +21,9 @@ function queueThumbnailMarkup(c,grouped=false){
  return `<span class="queue-thumb-title">${escapeHtml(u.title)}</span><span class="queue-wave-preview"><canvas width="360" height="160" data-queue-wave="${escapeHtml(c.id)}" role="img" aria-label="${escapeHtml(u.title)} all member waveform thumbnail"></canvas><span class="queue-wave-loading">${c.synthetic===false?'Loading…':'Synthetic demo'}</span></span><span class="queue-thumb-count">${u.spikes.toLocaleString()} spikes</span><span class="queue-thumb-quality">${queueSort==='quality'?'Quality '+escapeHtml(ReviewQuality.cell(c,u.cluster_id)):quality==null?'ISI —':`ISI ${(quality*100).toFixed(2)}%`}</span>${target?`<span class="queue-comparing">vs. ${escapeHtml(unitLabel(c,target))}</span>`:''}${grouped?`<span class="queue-state">State ${escapeHtml(c.state_sha256?.slice(0,8)||'demo')}</span>`:''}`;
 }
 function queueSortEntries(rows){
- return [...rows].sort((a,b)=>{const ua=sourceUnit(a.c),ub=sourceUnit(b.c),qa=queueQuality.get(queueQualityKey(a.c))??Infinity,qb=queueQuality.get(queueQualityKey(b.c))??Infinity;const quality=typeof ReviewQuality!=='undefined'?ReviewQuality.rank(a.c,ua.cluster_id)-ReviewQuality.rank(b.c,ub.cluster_id):0;return (queueSort==='quality'?quality||ub.spikes-ua.spikes:queueSort==='isi'?qa-qb||ub.spikes-ua.spikes:ub.spikes-ua.spikes||quality||qa-qb)||ua.cluster_id-ub.cluster_id||a.c.id.localeCompare(b.c.id);});
+ return [...rows].sort((a,b)=>{const ua=sourceUnit(a.c),ub=sourceUnit(b.c);
+ const value=(row,u)=>queueSort==='quality'?ReviewQuality.rank(row.c,u.cluster_id):queueSort==='isi'?queueQuality.get(queueQualityKey(row.c)):u.spikes;
+ return InterfaceCore.compare(value(a,ua),value(b,ub),queueDirections[queueSort])||ub.spikes-ua.spikes||ua.cluster_id-ub.cluster_id||a.c.id.localeCompare(b.c.id);});
 }
 async function ensureQueueQuality(c){
  if(c.synthetic!==false)return;
@@ -43,10 +58,9 @@ function attachQueueGallery(){
   if(active.dataset_id!==row.c.dataset_id||active.state_sha256!==row.c.state_sha256||!active.units.some(unit=>unit.cluster_id===u.cluster_id)){toast('Choose two clusters from the same recording and saved state. Use Compare with for candidates in the current state.');return;}
   selectComparison(u.id===active.source?'':u.id);
  };
- const active=currentCase();if(active?.synthetic===false&&active.review_mode!=='manual')for(const button of document.querySelectorAll('#case-list [data-case]')){const row=rows.get(button.dataset.case);if(!row)continue;const cluster=sourceUnit(row.c);const affects=row.c.dataset_id===active.dataset_id&&row.c.state_sha256===active.state_sha256&&[active.source,...(active.pair||[])].some(id=>active.units.find(u=>u.id===id)?.cluster_id===cluster.cluster_id);button.classList.toggle('agent-object',affects);if(affects){const tag=document.createElement('span');tag.className='agent-object-label';tag.textContent='AI · '+active.ai;tag.title='Saved Agent recommendation affects this cluster in this exact state';button.append(tag);}}
  const sort=$('#queue-sort');sort.value=queueSort;sort.disabled=false;
  $('#queue-sort-status').textContent=queueSort==='quality'?'Imported scores · source direction · missing last.':queueSort==='isi'?'ISI <2 ms · lower first · missing last.':'Shift-click a second cluster to compare.';
- sort.onchange=()=>{queueSort=sort.value;try{localStorage.setItem('spike-review-queue-sort',queueSort);}catch{}renderQueue();};
+ sort.onchange=()=>setQueueSort(sort.value);syncQueueSortControls();
  if(queueSort==='isi'){
   const needed=queueScope().filter(c=>c.synthetic===false&&expandedQueueFiles.has(queueFile(c).key)&&!queueQuality.has(queueQualityKey(c))),unique=new Map(needed.map(c=>[c.dataset_id+':'+c.state_sha256,c]));
   if(unique.size){

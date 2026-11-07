@@ -105,3 +105,13 @@ output/
 
 # MEArec scratch file emitted in the working directory
 tmp_params_path.yaml
+
+# Local browser validation and deployment snapshots (contain repeated site copies).
+/.cache/
+
+# Generated review data and evidence; keep the maintained dist JS/HTML/CSS tracked.
+# Builders: mockups/curation-review/backend/build_{free,public_demo}_share.py
+/mockups/curation-review/dist/public-data/
+/mockups/curation-review/dist/review-pca/
+/mockups/curation-review/dist/review-waveforms/
+/mockups/curation-review/dist/share/

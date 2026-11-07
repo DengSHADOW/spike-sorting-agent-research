@@ -16,7 +16,7 @@ function renderGeneralReasons(){
   draft.reason=$('#reason-select').value;isDirty=true;$('#form-error').textContent='';hideReasonMatches();renderChoiceSummaries();cacheLocalDraft();if(custom)$('#reason-select').focus();
  };
  const owner=reviewerId+':'+mode;
- if(backend&&mode==='real'&&generalReasonLoadedFor!==owner&&generalReasonLoadingFor!==owner){
+ if(backend&&(mode==='real'||window.PublicData?.configured)&&generalReasonLoadedFor!==owner&&generalReasonLoadingFor!==owner){
   generalReasonLoadingFor=owner;const epoch=generalReasonEpoch;
   api('/api/reasons/export').then(result=>{if(epoch!==generalReasonEpoch||owner!==reviewerId+':'+mode)return;mergeReasons(result.reasons);generalReasonLoadedFor=owner;generalReasonLoadingFor='';renderGeneralReasons();}).catch(()=>{if(epoch!==generalReasonEpoch)return;generalReasonLoadingFor='';$('#general-reason-status').textContent='Some saved reasons could not load. Existing input and notes remain available.';});
  }

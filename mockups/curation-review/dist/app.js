@@ -166,6 +166,7 @@ async function connectBackend(){
     renderReviewerBadge();
     if(state.reasons.length)await api('/api/reasons/import',{reasons:state.reasons.slice(0,500).map(r=>r.text)});
     mergeReasons((await api('/api/reasons')).reasons);renderReasons();
+    if(window.PublicData?.configured)return;
     if(new URLSearchParams(location.search).get('source')!=='demo'&&bundleCatalog.length){
       let previous,lastSource;try{previous=localStorage.getItem('spikeagent-active-bundle');lastSource=localStorage.getItem('spikeagent-last-source-v1:'+reviewerId);}catch{}
       if(lastSource==='demo'){await switchSource('demo',true);return;}
@@ -389,7 +390,7 @@ function renderCase(){
   const stats=[u,...(other?[other]:[])];
   $('#metrics').innerHTML='<div class="metrics-table" role="table" aria-label="Cluster statistics"><div class="metric-table-header" role="row">'+['Cluster','Spikes','Detail','Active','Evidence'].map(text=>`<span role="columnheader">${text}</span>`).join('')+'</div>'+stats.map(unit=>`<div class="metric-table-row" role="row" data-stat-cluster="${escapeHtml(unit.id)}"><strong role="cell">${escapeHtml(unit.title)}</strong><span role="cell">${unit.spikes.toLocaleString()}</span><span role="cell" title="${c.synthetic===false?'All individual member waveforms in Cluster detail':'Number of illustrative detail traces'}">${c.synthetic===false?waveformCoverageLabel(unit):target?'Mean':traceCount+' traces'}</span><span role="cell" title="Active clusters in this recording and checkpoint">${c.units.length}</span><span role="cell">${c.synthetic===false?'MAT':'Demo'}</span></div>`).join('')+'</div>';
   $('#agent-card-title').textContent=c.review_mode==='manual'?'Agent':agentName(c);
-  $('#suggestion').innerHTML=c.review_mode==='manual'?'<div class="suggestion-card"><div class="suggestion-label">MANUAL REVIEW</div><p>No saved Agent suggestion matches this recording-start state. Review this cluster using its waveform and timing evidence.</p></div>':`<div class="suggestion-card"><div class="suggestion-label">${c.synthetic===false?escapeHtml(agentName(c))+' · SAVED RESPONSE':'Agent 1 · SCRIPTED DEMO'}</div><div class="suggestion-action" data-agent-action="${c.ai}"><strong>${escapeHtml(ACTIONS[c.ai].label.toUpperCase())}</strong><span class="agent-action-target">${escapeHtml(sourceUnit(c).title)} ${viewingTag(c.source)}${c.pair?' + '+escapeHtml(unitLabel(c,c.pair[1]))+' '+viewingTag(c.pair[1]):''}</span></div>${c.rationale_available===false?'<p class="missing-rationale">No rationale was retained. Review the action and evidence; no explanation is generated here.</p>':`<p class="rationale" id="rationale-text">${escapeHtml(c.rationale)}</p>`}</div>`;
+  $('#suggestion').innerHTML=c.review_mode==='manual'?'<div class="suggestion-card"><div class="suggestion-label">MANUAL REVIEW</div><p>No saved Agent suggestion matches this recording-start state. Review this cluster using its waveform and timing evidence.</p></div>':`<div class="suggestion-card"><div class="suggestion-label">${c.synthetic===false?escapeHtml(agentName(c))+' · SAVED RESPONSE':'Agent 1 · SCRIPTED DEMO'}</div><div class="suggestion-action" data-agent-action="${c.ai}"><strong>${escapeHtml(ACTIONS[c.ai].label.toUpperCase())}</strong><span class="agent-action-target">${escapeHtml(sourceUnit(c).title)} ${viewingTag(c.source)}${c.pair?' + '+escapeHtml(unitLabel(c,c.pair[1]))+' '+viewingTag(c.pair[1]):''}</span></div>${c.rationale_available===false?'<p class="missing-rationale">No rationale was retained. Review the action and evidence; no explanation is generated here.</p>':`<div class="rationale-label">Rationale</div><p class="rationale" id="rationale-text">${escapeHtml(c.rationale)}</p>`}</div>`;
   recordVisibleRationale();
   $('#validity-warning').innerHTML=!sourceUnit(c).split&&c.ai==='SPLIT'?(c.synthetic===false?'<div class="warning">No saved tree split is available. Use Split to select spikes in PCA.</div>':'<div class="warning"><strong>SPLIT is unavailable.</strong><br>This is a leaf node. Select a valid action or defer the case.</div>'):'';
   renderActions();renderEvidence();
@@ -427,7 +428,7 @@ function renderActions(){
   for(const [id,value] of [['agree-button',true],['disagree-button',false]]){
     $('#'+id).classList.toggle('selected',draft.agree===value);$('#'+id).setAttribute('aria-pressed',String(draft.agree===value));
   }
-  $('#correction-panel .reason-section').hidden=false;$('#correction-panel').hidden=!manual&&draft.agree!==false;$('#positive-panel').hidden=manual?draft.action!=='KEEP':draft.agree!==true;
+  $('#correction-panel .reason-section').hidden=false;$('#correction-panel').hidden=!manual&&draft.agree!==false;$('#positive-panel').hidden=true;
   $('#action-grid').innerHTML=actions.map(a=>`<button type="button" class="action-option ${draft.action===a?'selected':''}" data-action="${a}" aria-pressed="${draft.action===a}" ${!allowed(c).includes(a)&&!(c.synthetic===false&&a==='SPLIT')?'disabled title="No child clusters are available"':''}><span class="action-icon" aria-hidden="true">${ACTIONS[a].icon}</span><span>${ACTIONS[a].label}</span><span class="radio" aria-hidden="true"></span></button>`).join('');
   $$('[data-action]').forEach(b=>b.onclick=()=>{draft.action=b.dataset.action;isDirty=true;$('#form-error').textContent='';if(c.synthetic===false&&['SPLIT','MERGE','DISCARD'].includes(draft.action)){if(draft.action==='MERGE'){draft.target=comparisonTarget(c)||draft.target||'';if(!draft.target){$('#form-error').textContent='Select a comparison cluster first.';return;}}renderActions();cacheLocalDraft();WorkingReview.openOperation(draft.action).catch(error=>{$('#form-error').textContent=error.message;});return;}if(draft.action==='DEFER')draft.sufficiency='insufficient';if(draft.action==='NOT_MERGE'){draft.target=comparisonTarget(c);renderActions();renderEvidence();}else if(draft.action==='MERGE'){const target=comparisonTarget(c)||draft.target||'';draft.target=target;selectComparison(target);}else{renderActions();renderEvidence();}});
   $('#merge-controls').hidden=draft.action!=='MERGE';
@@ -587,9 +588,9 @@ async function undoReview(id,force=false){
 }
 const activityViews=new Map();
 async function loadSavedActivity(){
- const identity=reviewerId,warnings=[];let payload,workspaces=[];
- payload=mode==='real'?await api('/api/export'):{reviews:Object.values(state.reviews),events:state.events,reviewer_id:reviewerId};
- if(mode==='real')try{workspaces=await ActivityUI.readWorkspaces(identity);}catch(e){warnings.push('Working history unavailable: '+e.message);}
+ const identity=reviewerId,warnings=[],realData=mode==='real'||!!window.PublicData?.configured;let payload,workspaces=[];
+ payload=realData?await api('/api/export'):{reviews:Object.values(state.reviews),events:state.events,reviewer_id:reviewerId};
+ if(realData)try{workspaces=await ActivityUI.readWorkspaces(identity);}catch(e){warnings.push('Working history unavailable: '+e.message);}
  return {...ActivityCore.combine(workspaces,payload),warnings};
 }
 function activityName(id){return ReviewerProfiles.list(localStorage).find(r=>r.id===id)?.name||(id?String(id).slice(0,8):profileName||'Reviewer');}
@@ -613,14 +614,15 @@ function renderRevisions(){return renderActivity('revisions');}
 $('#revisions-refresh').onclick=renderRevisions;
 async function exportFeedback(){
   if(isWorkingReview()&&currentView==='review')return WorkingReview.exportResult();
+  const realData=mode==='real'||!!window.PublicData?.configured;
   let payload={schema:Core.SCHEMA,synthetic:true,notice:'Illustrative feedback only. No model or spike curation operations were performed. Null hashes mean no real experiment provenance exists.',exported_at:new Date().toISOString(),reviews:Object.values(state.reviews),events:state.events,reason_library:state.reasons,
     legacy_v1:legacyFeedback,legacy_notice:legacyFeedback?'Preserved original v1 data; not reinterpreted as v2 annotations.':null};
-  if(mode==='real'){
-    try{payload=await api('/api/export');payload.browser_exposure_events=state.events;payload.active_dataset_provenance=realCatalog.provenance;}
+  if(realData){
+    try{payload=await api('/api/export');payload.browser_exposure_events=state.events;payload.active_dataset_provenance=window.PublicData?.configured&&WorkingReview.active?{dataset_id:WorkingReview.state.dataset_id,mat_sha256:WorkingReview.input.data.source_sha256,public_package_sha256:WorkingReview.input.data.public_package_sha256}:realCatalog?.provenance||null;}
     catch(error){toast(`Server export failed: ${error.message}`);return;}
   }
   const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');
-  a.href=url;a.download=mode==='real'?'spikeagent-feedback-v3.json':'spikeagent-demo-feedback-v2.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  a.href=url;a.download=realData?'spikeagent-feedback-v3.json':'spikeagent-demo-feedback-v2.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
   toast(`Exported ${payload.reviews.length} review${payload.reviews.length===1?'':'s'} and the event history.`);
 }
 
@@ -629,9 +631,9 @@ function rng(seed){let n=seed;return()=>{n=(Math.imul(n,1664525)+1013904223)>>>0
 function axes(w,h,xLabel,yLabel,xLabels,yLabels){
   const l=40,r=14,t=18,b=32,iw=w-l-r,ih=h-t-b;
   let markup='';
-  for(let i=0;i<5;i++){const y=t+ih*i/4;markup+=`<path d="M${l} ${y}H${w-r}" stroke="#edf1f4"/><text x="${l-9}" y="${y+3}" text-anchor="end">${yLabels[i]??''}</text>`;}
+  for(let i=0;i<5;i++){const y=t+ih*i/4;markup+=`<path d="M${l} ${y}H${w-r}" stroke="#edf1f4"/><text class="y-axis-tick" x="${l-9}" y="${y+3}" text-anchor="end">${yLabels[i]??''}</text>`;}
   for(let i=0;i<xLabels.length;i++){const x=l+iw*i/(xLabels.length-1);markup+=`<text x="${x}" y="${h-17}" text-anchor="middle">${xLabels[i]}</text>`;}
-  markup+=`<text class="axis-label" x="${l+iw/2}" y="${h-2}" text-anchor="middle">${xLabel}</text><text class="axis-label" x="3" y="10">${yLabel}</text>`;
+  markup+=`<text class="axis-label" x="${l+iw/2}" y="${h-2}" text-anchor="middle">${xLabel}</text><text class="axis-label axis-label-y" x="3" y="10">${yLabel}</text>`;
   return {markup,l,t,iw,ih};
 }
 function templateValue(u,x){
@@ -790,12 +792,25 @@ function realEvidence(c,u){
   return plotCard(`${u.title} · real waveform`,'Extra reviewer evidence · mean + up to 24 traces',waveformLegend(u)+waveform(u))+
     `<p class="tree-note">${c.review_mode==='manual'?'Initial MAT hierarchy · manual review.':`Inspecting comparison ${u.title}; the review object remains ${sourceUnit(c).title}.`}</p>`;
 }
+function spaceYAxisTitle(svg){
+  const title=svg.querySelector('.axis-label-y'),tick=svg.querySelector('.y-axis-tick'),matrix=svg.getScreenCTM();
+  if(!title||!tick||!matrix)return;
+  const scale=Math.hypot(matrix.c,matrix.d);if(!scale)return;
+  title.setAttribute('y','10');
+  const labelBox=title.getBBox(),tickBox=tick.getBBox();
+  title.setAttribute('y',Math.min(10,tickBox.y-8/scale-(labelBox.y+labelBox.height-10)));
+  const box=title.getBBox(),view=svg.viewBox.baseVal,top=Math.min(view.y,box.y-5/scale);
+  if(top<view.y)svg.setAttribute('viewBox',[view.x,top,view.width,view.height+view.y-top].join(' '));
+}
 function syncPlotTypography(){
   $$('#evidence-content svg, #modal-content svg').forEach(svg=>{
     if(svg.closest('.cluster-thumbnail'))return;
+    if(!svg.dataset.axisBaseViewBox)svg.dataset.axisBaseViewBox=svg.getAttribute('viewBox');
+    if(!window.ReviewStudio?.active)svg.setAttribute('viewBox',svg.dataset.axisBaseViewBox);
     const screenSize=Math.max(12,Math.min(16,(parseFloat(getComputedStyle(svg.closest('.plot-card')||svg).fontSize)||16)*.9));
     const width=svg.clientWidth,viewWidth=svg.viewBox.baseVal.width;
     if(width>0&&viewWidth>0)svg.style.setProperty('--chart-label-size',`${screenSize*viewWidth/width}px`);
+    if(!window.ReviewStudio?.active)spaceYAxisTitle(svg);
   });
 }
 // View transforms are local to each graphic; data and review drafts are untouched.
@@ -1001,7 +1016,7 @@ function showUnsaved(nextId,callback=null){
 function showAbout(){
   if(isWorkingReview()){modal('Curation session','<p>Choose an action, inspect any projected waveforms and timing, then Confirm. Undo restores the previous grouping. Export sorting result saves per-spike assignments; Export session also saves data and history.</p>');return;}
   if(mode==='real'){
-    modal('Jacob real-data review',`<div class="modal-prose"><p><strong>${escapeHtml(realCatalog.dataset_id)}</strong> · ${CASES.length} ${realCatalog.source_kind==='initial'?'initial clusters for manual review':'historical agent responses'}. Actions open directly. Confirm saves the judgment or applies the inspected grouping change; original saved states remain available.</p><p>Saved input PNGs, when present, are original model evidence. Waveform comparison, quality metrics, ISI, ACG/CCG and amplitude-over-time are reviewer evidence derived from the MAT inputs. Select Split or Merge to preview, then Confirm to apply the change. Anonymous comparison cases share a reconstructed reference state; historical model input protocols differ.</p><p>Use Data & inputs to upload/import approved MAT files, select views, manage reason files or restore feedback. Reviews, revisions, reasons and reviewer names are saved on this server.</p><p>No live model, automatic experiment or training is running.</p></div>`);return;
+    modal('Jacob real-data review',`<div class="modal-prose"><p><strong>${escapeHtml(realCatalog.dataset_id)}</strong> · ${CASES.length} ${realCatalog.source_kind==='initial'?'initial clusters for manual review':'historical agent responses'}. Actions open directly. Confirm saves the judgment or applies the inspected grouping change; original saved states remain available.</p><p>Saved input PNGs, when present, are original model evidence. Waveform comparison, quality metrics, ISI, ACG/CCG and amplitude-over-time are reviewer evidence derived from the MAT inputs. Select Split or Merge to preview, then Confirm to apply the change. Anonymous comparison cases share a reconstructed reference state; historical model input protocols differ.</p><p>Select published views, manage browser-local reasons or restore feedback. Use Load data to connect to private Runpod data. Reviews, revisions, new reasons and reviewer names stay in this browser. Export JSON to share or transfer feedback.</p><p>No live model, automatic experiment or training is running.</p></div>`);return;
   }
   modal('A workspace for expert judgment',`<div class="modal-prose"><p><strong>Try it.</strong> Agree with a KEEP without a comment. Disagree with only a rationale. For the merge case, replace target 021 with 034. Explore all waveforms and the gallery.</p><p><strong>Feedback.</strong> Disagreement needs a reason or note; agreement can include an optional positive comment. New reasons can be reused in this browser.</p><p><strong>Persistence.</strong> Save, reload, undo and export preserve review events. Older v1 feedback stays untouched and is exported separately.</p><p><strong>Scope.</strong> All recordings, counts, plots and AI suggestions are synthetic. No models, MAT files, backend actions or learning jobs are connected.</p></div>`);
 }
@@ -1078,9 +1093,11 @@ document.addEventListener('keydown',e=>{
 });
 window.addEventListener('beforeunload',e=>{cacheLocalDraft();if(isDirty){e.preventDefault();e.returnValue='';}});
 window.addEventListener('resize',()=>{syncPlotTypography();$$('.plot-viewport').forEach(v=>v.dispatchEvent(new Event('plotresize')));});
-populateQueueFiles();
-selectCase(lastSelectedCase()||selectedId,true);
-showView(location.hash.replace('#','')||'review');
+if(!window.PublicData?.configured){
+  populateQueueFiles();
+  selectCase(lastSelectedCase()||selectedId,true);
+  showView(location.hash.replace('#','')||'review');
+}
 $('#storage-warning').hidden=storageAvailable;
 if(!storageAvailable)toast('Browser storage unavailable. Export feedback before closing.');
 window.addEventListener('DOMContentLoaded',()=>connectBackend().finally(()=>WorkingReview.mount()),{once:true});

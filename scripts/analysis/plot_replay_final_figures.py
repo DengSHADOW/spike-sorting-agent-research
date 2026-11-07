@@ -32,12 +32,13 @@ RULE_EVERY = 8  # ours proposes rule edits after every 8 revealed questions (rul
 # Colours and names follow the advisor's example figure (Slack, 2026-11-01).
 INK, INK2 = "#0b0b0b", "#52514e"
 COLOR = dict(spikeagent="#D4A62A", base="#8E8E8E", context="#D9703A", ours="#2F6EB8", scratch="#3BA27A",
-             thinking="#7B4FA6")
+             thinking="#7B4FA6", answer_thinking="#8DB2E0")
 NAME = dict(spikeagent="SpikeAgent", base="Base agent", context="Long-context agent", ours="Ours",
-            scratch="Ours, learned on the target", thinking="Ours + thinking")
+            scratch="Ours, learned on the target", thinking="Ours + thinking",
+            answer_thinking="Ours, answers with thinking")
 DASH = dict(thinking=(0, (4, 1.6)))  # line style next to the colour, so the two ours lines differ without colour
 XLABEL = dict(spikeagent="SpikeAgent", base="Base\nagent", context="Long-\ncontext\nagent", ours="Ours",
-              scratch="Ours,\nlearned on\nthe target")
+              scratch="Ours,\nlearned on\nthe target", answer_thinking="Ours,\nanswers\nwith thinking")
 
 
 def read(path):
@@ -257,12 +258,13 @@ def draw_online_ours(ax, ctx, c, letter, legend=True):
                   handlelength=1.6, columnspacing=1.3)
 
 
-def draw_transfer(ax, ctx, src, tgt, letter, with_scratch=False, title=True, ylabel=YLABEL, ours="ours"):
+def draw_transfer(ax, ctx, src, tgt, letter, with_scratch=False, title=True, ylabel=YLABEL, ours="ours", extra=()):
     """Panel: accuracy on the target channel after learning on the source (bars, mean ± s.e.).
-    ours: which runs fill the Ours bar ("thinking" = the frozen C1 agents), drawn and named as Ours either way."""
+    ours: which runs fill the Ours bar ("thinking" = the frozen C1 agents), drawn and named as Ours either way.
+    extra: more methods drawn after Ours (e.g. "answer_thinking"), each from ctx["numbers"]."""
     import matplotlib
     numbers, f = ctx["numbers"], f"{src}>{tgt}"
-    order = ["spikeagent", "base", "context", "ours"] + (["scratch"] if with_scratch else [])
+    order = ["spikeagent", "base", "context", "ours"] + (["scratch"] if with_scratch else []) + list(extra)
     vals = [numbers[f"{f}:{ours if m == 'ours' else m}"]["accuracy"] for m in order]
     errs = [numbers[f"{f}:{ours if m == 'ours' else m}"]["se"] or 0 for m in order]
     ax.bar(range(len(order)), vals, width=.62, color=[COLOR[m] for m in order], yerr=errs,

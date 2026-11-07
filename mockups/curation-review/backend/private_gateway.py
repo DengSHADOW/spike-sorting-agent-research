@@ -13,6 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import secrets
+import signal
 import threading
 import time
 from urllib.parse import parse_qs, urlsplit
@@ -158,8 +159,13 @@ def handler_for(app):
             if not self.guard_origin():
                 return
             parts = urlsplit(self.path)
+            if parts.path.startswith('/api/compute/'):
+                self.reply(dict(error='Use the server operation API; raw data is not available'), 405)
+                return
             if parts.path == '/health':
-                self.reply(dict(status='ok', authentication_required=True, model_calls_enabled=False))
+                self.reply(dict(status='ok', authentication_required=True, model_calls_enabled=False,
+                                server_curation_enabled=bool(getattr(app, 'curation', None)),
+                                raw_data_public=False))
                 return
             account = app.identity(self.headers_in.get('Authorization', ''))
             if account is None:
@@ -202,6 +208,52 @@ def handler_for(app):
         def do_POST(self):
             if not self.guard_origin(required=True):
                 return
+            if self.path.startswith('/api/compute/upload-chunk?') and getattr(app, 'curation', None):
+                from server_uploads import CHUNK_BYTES
+                from server_curation import CurationError
+                try:
+                    owner = app.curation.identity(self.headers_in.get('Authorization', ''))
+                    query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+                    if set(query) != {'upload_id', 'file', 'offset'} or any(len(v) != 1 for v in query.values()):
+                        raise ValueError('Invalid chunk request')
+                    length = int(self.headers_in.get('Content-Length', '0'))
+                    if not 0 < length <= CHUNK_BYTES or self.headers_in.get_content_type() != 'application/octet-stream':
+                        raise ValueError('Invalid chunk size or content type')
+                    data = self.rfile.read(length)
+                    if len(data) != length:
+                        raise ValueError('Incomplete chunk')
+                    self.reply(app.curation.uploads.chunk(owner, query['upload_id'][0],
+                               int(query['file'][0]), int(query['offset'][0]), data))
+                except CurationError as exc:
+                    self.reply(dict(error=str(exc)), exc.status)
+                except (ValueError, TypeError):
+                    self.reply(dict(error='Upload chunk rejected; check the file and received byte count'), 400)
+                return
+            if self.path.startswith('/api/compute/') and getattr(app, 'curation', None):
+                from server_curation import CurationError, MAX_BODY
+                try:
+                    length = int(self.headers_in.get('Content-Length', '0'))
+                    if not 0 < length <= MAX_BODY or self.headers_in.get_content_type() != 'application/json':
+                        raise CurationError('Invalid operation request')
+                    body = json.loads(self.rfile.read(length))
+                    result, content_type = app.curation.request(
+                        self.path.removeprefix('/api/compute/'), body,
+                        self.headers_in.get('Authorization', ''))
+                    if content_type == 'image/png':
+                        self.response_headers(200, len(result), content_type)
+                        self.end_headers()
+                        self.wfile.write(result)
+                    else:
+                        self.reply(result)
+                except CurationError as exc:
+                    self.reply(dict(error=str(exc)), exc.status)
+                except (ValueError, TypeError, json.JSONDecodeError):
+                    self.reply(dict(error='Invalid operation request'), 400)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                except Exception:
+                    self.reply(dict(error='Calculation unavailable. Your saved session is retained.'), 503)
+                return
             if self.path == '/api/private/logout':
                 token = self.headers_in.get('Authorization', '')
                 with app.lock:
@@ -238,12 +290,29 @@ def main():
     parser.add_argument('--config', type=Path, required=True)
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8888)
+    parser.add_argument('--server-curation', type=Path,
+                        help='Private storage for server-side sessions; enables the four approved channels')
     args = parser.parse_args()
     app = PrivateGateway(args.config)
+    if args.server_curation:
+        from server_curation import ServerCuration
+        app.curation = ServerCuration(app.packages, args.server_curation)
     server = ThreadingHTTPServer((args.host, args.port), handler_for(app))
     server.daemon_threads = True
     print('Private data gateway ready; authentication required; model calls disabled', flush=True)
-    server.serve_forever()
+    if getattr(app, 'curation', None):
+        print('Server curation ready; automatic isolated sessions; no public numeric packages', flush=True)
+    def stop(signum, frame):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, stop)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+        if getattr(app, 'curation', None):
+            app.curation.close()
 
 
 if __name__ == '__main__':
