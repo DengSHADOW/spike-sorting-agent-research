@@ -45,7 +45,9 @@ test('original Firebase controls remain intact while Agent cards show uploaded a
     assert.equal(await page.evaluate(()=>WorkingReview.selected.source),1);
     assert.ok(Number(await page.locator('[data-main-wave] canvas').getAttribute('data-drawn'))>0,'Verified member waveforms finish drawing');
     for(const agent of ['Agent_1','Agent_2']) {
-      await page.locator('#agent-choice').selectOption(agent);
+      await page.locator(`[data-agent-choice="${agent}"]`).click();
+      assert.equal(await page.locator(`#agent-card>summary [data-agent-choice="${agent}"]`).getAttribute('aria-pressed'),'true');
+      assert.equal(await page.locator('#agent-card').evaluate(card=>card.open),true,'Switching Agent does not collapse its card');
       const row = await page.evaluate(agentId=>WorkingReview.input.data.agent_suggestions.find(r=>r.agent_id===agentId&&r.phase==='phase1'&&r.source===1&&(r.target??null)===null&&r.state_sha256===WorkingReview.input.data.initial_state_sha256),agent);
       assert.ok(row,'The displayed Agent decision exists in the uploaded package');
       assert.equal(row.action,'SPLIT');
@@ -60,7 +62,7 @@ test('original Firebase controls remain intact while Agent cards show uploaded a
       await replay.locator('summary').click();
       await noAILabels();
     }
-    await page.locator('#agent-choice').selectOption('Agent_1');
+    await page.locator('[data-agent-choice="Agent_1"]').click();
   }
   async function makeCacheOld() {
     await page.evaluate(async()=>{

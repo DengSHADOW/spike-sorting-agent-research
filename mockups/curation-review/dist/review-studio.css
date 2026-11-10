@@ -274,3 +274,14 @@
 .review-studio.public-starting .app>:not(#view-review){visibility:hidden}
 .review-studio.public-starting #public-load-panel{display:flex;top:42%;bottom:auto;left:50%;right:auto;transform:translate(-50%,-50%);max-width:min(440px,calc(100vw - 32px));padding:18px 20px;font-size:14px}
 .review-studio.public-starting .rail{pointer-events:none}
+
+/* Agent switching stays in the card header, including when the card is collapsed. */
+#agent-card>summary #agent-picker{flex:0 0 auto;margin:0;min-width:0}
+#agent-card>summary>.collapse-hint{display:none}
+.agent-toggle{display:inline-flex;align-items:center;gap:2px;padding:2px;border:1px solid #c8b697;border-radius:999px;background:#eee4d5;white-space:nowrap}
+.agent-toggle button{min-height:28px;padding:3px 8px;border:0;border-radius:999px;background:transparent;color:#71583a;font-size:11px;font-weight:600;line-height:1.3;transition:background .15s,color .15s,box-shadow .15s}
+.agent-toggle button[aria-pressed="true"]{background:#fff;color:#52350f;box-shadow:0 1px 3px #54371126}
+.agent-toggle button:hover:not(:disabled){background:#ffffffa6}
+.agent-toggle button:focus-visible{outline:2px solid #386f91;outline-offset:2px}
+.agent-toggle button:disabled{opacity:.45;cursor:not-allowed}
+@media(max-width:600px){#agent-card>summary{gap:5px}.agent-toggle button{padding-inline:6px}}

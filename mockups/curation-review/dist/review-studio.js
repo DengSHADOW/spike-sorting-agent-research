@@ -6,6 +6,36 @@ window.ReviewStudio=(()=>{
  const workOpacities=new Map();
  const projections=new WeakMap();let projectionId=0;
  const nativeAgentMenu=renderAgentMenu;
+ const agentSelect=$('#agent-choice'),agentToggle=$('.agent-toggle');
+ const agentButtons=[...agentToggle.querySelectorAll('[data-agent-choice]')];
+ function syncAgentToggle(){
+  const available=new Set([...agentSelect.options].filter(option=>!option.disabled).map(option=>option.value));
+  for(const button of agentButtons){
+   button.disabled=agentSelect.disabled||!available.has(button.dataset.agentChoice);
+   button.setAttribute('aria-pressed',String(agentSelect.value===button.dataset.agentChoice));
+   button.title=agentSelect.title||'';
+  }
+ }
+ agentToggle.addEventListener('click',event=>{
+  event.preventDefault();event.stopPropagation();
+  const button=event.target.closest('[data-agent-choice]');
+  if(!button||button.disabled||agentSelect.disabled||agentSelect.value===button.dataset.agentChoice)return;
+  agentSelect.value=button.dataset.agentChoice;
+  agentSelect.dispatchEvent(new Event('change',{bubbles:true}));
+  queueMicrotask(syncAgentToggle);
+ });
+ agentToggle.addEventListener('keydown',event=>{
+  event.stopPropagation();
+  if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
+  event.preventDefault();
+  const enabled=agentButtons.filter(button=>!button.disabled);
+  if(!enabled.length)return;
+  const at=enabled.indexOf(document.activeElement),next=event.key==='Home'?0:event.key==='End'?enabled.length-1:(at+(event.key==='ArrowLeft'?-1:1)+enabled.length)%enabled.length;
+  enabled[next].focus();enabled[next].click();
+ });
+ agentSelect.addEventListener('change',()=>queueMicrotask(syncAgentToggle));
+ new MutationObserver(syncAgentToggle).observe(agentSelect,{childList:true,subtree:true,attributes:true,attributeFilter:['disabled','title']});
+ syncAgentToggle();
  function actionOf(text){const value=String(text||'').trim().replace(/^AI\s*[·:]\s*/i,'').toUpperCase();if(value==='DISCARDED')return 'DISCARD';for(const id of ['NOT_MERGE','DISCARD','SPLIT','MERGE','KEEP','DEFER'])for(const label of [id,ACTIONS[id]?.label?.toUpperCase()])if(label&&(value===label||value.startsWith(label+' ')||value.startsWith(label+' ·')))return id;return '';}
  async function confirmGroupingEdit(plan){
   return new Promise(resolve=>{
@@ -38,6 +68,7 @@ window.ReviewStudio=(()=>{
   }
   for(const option of [...$('#agent-choice').options])if(!['Agent_1','Agent_2'].includes(option.value))option.remove();
   decorateOrigins();
+  syncAgentToggle();
  }
  renderAgentMenu=function(){const value=nativeAgentMenu();decorateActions();return value;};
  let decorationQueued=false;

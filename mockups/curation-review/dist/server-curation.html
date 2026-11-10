@@ -8,7 +8,7 @@
   <title>SpikeAgent · Review studio</title>
   <link rel="stylesheet" href="style.css?grouping-revision-20261028-1">
   <link rel="stylesheet" href="activity.css?grouping-revision-20261028-1">
-  <link rel="stylesheet" href="review-studio.css?agent-clean-startup-20261102-1">
+  <link rel="stylesheet" href="review-studio.css?agent-toggle-20261110-1">
   </head>
 <body class="review-studio">
   <div class="shell">
@@ -64,7 +64,7 @@
 
           <aside class="decision-panel" id="decision-panel" tabindex="0" aria-label="Your review, scrollable">
             <div class="decision-sticky"><div class="decision-heading"><h2>Agent and your review</h2><span class="reviewer-chip"><span></span>Expert</span></div>
-            <details class="agent-suggestion-box" id="agent-card" open><summary><strong id="agent-card-title">Agent 1</strong><span class="collapse-hint">Hide</span></summary><div class="agent-card-content"><label class="agent-selection" id="agent-picker" hidden for="agent-choice"><span class="sr-only">Choose agent</span><select id="agent-choice" aria-label="Anonymous agent"><option value="Agent_1">Agent 1</option><option value="Agent_2">Agent 2</option></select></label><div id="suggestion"></div><button id="open-closed-agent" class="text-button" hidden>Configure Agent 3</button></div><div id="agent-height-resizer" class="agent-height-resizer" role="separator" tabindex="0" aria-orientation="horizontal" aria-label="Resize agent panel height" title="Drag vertically to resize · double-click to show full content"><span></span></div></details></div>
+            <details class="agent-suggestion-box" id="agent-card" open><summary><strong id="agent-card-title">Agent 1</strong><span class="agent-selection" id="agent-picker" hidden><select id="agent-choice" aria-label="Anonymous agent" hidden tabindex="-1" aria-hidden="true"><option value="Agent_1">Agent 1</option><option value="Agent_2">Agent 2</option></select><span class="agent-toggle" role="group" aria-label="Choose agent"><button type="button" data-agent-choice="Agent_1" aria-pressed="true">Agent 1</button><button type="button" data-agent-choice="Agent_2" aria-pressed="false">Agent 2</button></span></span><span class="collapse-hint sr-only">Hide</span></summary><div class="agent-card-content"><div id="suggestion"></div><button id="open-closed-agent" class="text-button" hidden>Configure Agent 3</button></div><div id="agent-height-resizer" class="agent-height-resizer" role="separator" tabindex="0" aria-orientation="horizontal" aria-label="Resize agent panel height" title="Drag vertically to resize · double-click to show full content"><span></span></div></details></div>
             <div class="decision-content"><section class="comparison-choice-card" id="comparison-choice-card" aria-label="Comparison cluster choice" hidden></section>
             <div id="review-editor">
             <div id="validity-warning"></div>
@@ -142,7 +142,7 @@
   <script src="static-share.js?v=6"></script>
   <script src="app.js?agent-clean-startup-20261102-1"></script>
   <script src="action-reasons.js?grouping-revision-20261028-1"></script>
-  <script src="review-studio.js?agent-clean-startup-20261102-1"></script>
+  <script src="review-studio.js?agent-toggle-20261110-1"></script>
   <script src="inputs.js?grouping-revision-20261028-1"></script>
 </body>
 </html>

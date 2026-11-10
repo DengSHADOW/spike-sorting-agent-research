@@ -54,7 +54,7 @@ test('Agent feedback works without changing the original dataset and import cont
     assert.doesNotMatch(visible,/Agree selected\.|Disagree selected\.|Inspect both panels|Preview only/);
   }
   async function checkAgentCard(agent) {
-    await page.locator('#agent-choice').selectOption(agent);
+    await page.locator(`[data-agent-choice="${agent}"]`).click();
     const row = await page.evaluate(agentId=>WorkingReview.input.data.agent_suggestions.find(r=>r.agent_id===agentId&&r.phase==='phase1'&&r.source===WorkingReview.selected.source&&(r.target??null)===null&&r.state_sha256===WorkingReview.input.data.initial_state_sha256),agent);
     assert.ok(row,'The card uses an actual uploaded Agent suggestion');
     assert.equal(await page.locator('#suggestion .suggestion-action strong').innerText(),row.action);
@@ -109,7 +109,7 @@ test('Agent feedback works without changing the original dataset and import cont
       assert.equal(await page.evaluate(()=>WorkingReview.selected.source),1);
       assert.ok(Number(await page.locator('[data-main-wave] canvas').getAttribute('data-drawn'))>0);
       await checkAgentCard('Agent_1');await checkAgentCard('Agent_2');
-      await page.locator('#agent-choice').selectOption('Agent_1');
+      await page.locator('[data-agent-choice="Agent_1"]').click();
     });
 
     await t.test('Disagree immediately shows selected feedback while assignments remain unchanged and Confirm is disabled',async()=>{
@@ -119,6 +119,7 @@ test('Agent feedback works without changing the original dataset and import cont
       assert.equal(await page.locator('#save-button').isEnabled(),false);
       assert.equal(await page.locator('#studio-undo').isEnabled(),true);
       assert.equal(await page.locator('#agent-choice').isEnabled(),false,'Pending feedback cannot be assigned to a different Agent');
+      for(const button of await page.locator('[data-agent-choice]').all())assert.equal(await button.isEnabled(),false,'The visible toggle locks with pending feedback');
       assert.equal(await page.locator('#action-grid .selected').count(),0);
       assert.deepEqual(await snapshot(),ch3Initial);
     });
@@ -132,11 +133,12 @@ test('Agent feedback works without changing the original dataset and import cont
       await page.locator('#studio-undo').click();
       await pressed('#disagree-button',false);await pressed('#agree-button',false);
       assert.equal(await page.locator('#agent-choice').isEnabled(),true);
+      for(const button of await page.locator('[data-agent-choice]').all())assert.equal(await button.isEnabled(),true,'Cancel unlocks the visible toggle');
       assert.deepEqual(await snapshot(),ch3Initial);
     });
 
     await t.test('Agent 2 agreement previews the real Split and Cancel leaves grouping and Agent 1 feedback unchanged',async()=>{
-      await page.locator('#agent-choice').selectOption('Agent_2');
+      await page.locator('[data-agent-choice="Agent_2"]').click();
       await pressed('#disagree-button',false);await pressed('#agree-button',false);
       await page.locator('#agree-button').click();
       await pressed('#agree-button',true);await pressed('#disagree-button',false);
@@ -149,12 +151,12 @@ test('Agent feedback works without changing the original dataset and import cont
       assert.equal(await page.evaluate(()=>WorkingReview.preview),null);
       await pressed('#agree-button',false);await pressed('#disagree-button',false);
       assert.deepEqual(await snapshot(),ch3Initial);
-      await page.locator('#agent-choice').selectOption('Agent_1');
+      await page.locator('[data-agent-choice="Agent_1"]').click();
       await pressed('#agree-button',false);await pressed('#disagree-button',false);
     });
 
     await t.test('Disagree requires an explicit replacement action and reason or note, without an automatic commit',async()=>{
-      await page.locator('#agent-choice').selectOption('Agent_2');
+      await page.locator('[data-agent-choice="Agent_2"]').click();
       await page.locator('#disagree-button').click();
       assert.equal(await page.locator('#save-button').isEnabled(),false);
       await page.locator('#action-grid [data-action="KEEP"]').click();
@@ -202,14 +204,14 @@ test('Agent feedback works without changing the original dataset and import cont
     });
 
     await t.test('a pending draft returns to its original Agent after visiting the other channel',async()=>{
-      await page.locator('#agent-choice').selectOption('Agent_1');
+      await page.locator('[data-agent-choice="Agent_1"]').click();
       await page.locator('#disagree-button').click();
       await page.locator('#action-grid [data-action="KEEP"]').click();
       await page.locator('#general-reason-choice').selectOption('__new__');
       const note='This CH31 draft belongs to Agent 1 after a channel switch.';
       await page.locator('#review-note').fill(note);
       await loadButton('CH3');
-      await page.locator('#agent-choice').selectOption('Agent_2');
+      await page.locator('[data-agent-choice="Agent_2"]').click();
       await loadButton('CH31');
       assert.equal(await page.locator('#agent-choice').inputValue(),'Agent_1');
       await pressed('#disagree-button',true);
@@ -220,7 +222,7 @@ test('Agent feedback works without changing the original dataset and import cont
     });
 
     await t.test('Agree applies a Split only after Confirm and saves its preview provenance',async()=>{
-      await page.locator('#agent-choice').selectOption('Agent_1');
+      await page.locator('[data-agent-choice="Agent_1"]').click();
       await page.locator('#agree-button').click();
       await pressed('#agree-button',true);await pressed('#disagree-button',false);
       assert.equal(await page.evaluate(()=>WorkingReview.preview?.action),'SPLIT');
