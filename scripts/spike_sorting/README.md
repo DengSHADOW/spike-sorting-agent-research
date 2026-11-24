@@ -7,6 +7,22 @@ It reuses the spike sorting project's executor and terminal scorer. The expert
 trace never sets the action order. The shortlist is heuristic and the pilot is
 text-only.
 
+## Install the adapter in CoAutoResearch
+
+This branch supplies the spike sorting engine and adapter files. The adapter runs
+from a separate checkout of [CoAutoResearch](https://github.com/chuanyangjin/CoAutoResearch),
+which supplies the shared `HumanHarness`. From the root of a fresh CoAutoResearch
+checkout, copy the adapter and its domain prompts from this branch.
+
+```bash
+spike_repo=/absolute/path/to/spike-sorting-agent-research
+cp -R "$spike_repo/scripts/spike_sorting" scripts/
+cp -R "$spike_repo/scripts/coresearch-harness/domains/spike_sorting" scripts/coresearch-harness/domains/
+```
+
+Run the command below from the CoAutoResearch root and use
+`--spike-repo "$spike_repo"`. Use the team's existing CH3 MAT for the data input.
+
 ## Run on CH3
 
 Use a Python environment with NumPy, SciPy, h5py, Matplotlib, SpikeInterface,
